@@ -36,7 +36,9 @@ export default function StockPublico() {
     Object.entries(vals).forEach(([key, v]) => {
       if (v === '' || parseFloat(v) <= 0) return;
       const [tipo, id] = key.split('_');
-      items.push({ tipo, id: parseInt(id), cantidad: parseFloat(v) });
+      // tipo viene como 'prod' o 'int', normalizamos a 'producto' o 'intermedia'
+      const tipoNorm = tipo === 'prod' ? 'producto' : 'intermedia';
+      items.push({ tipo: tipoNorm, id: parseInt(id), cantidad: parseFloat(v) });
     });
     if (!items.length) { alert('Ingresá al menos una cantidad'); return; }
     setLoading(true);
