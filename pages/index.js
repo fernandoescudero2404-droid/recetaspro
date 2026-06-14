@@ -249,15 +249,46 @@ function Ventas({finales}){
 
 // ── STOCK ────────────────────────────────────────────────
 function Stock({productos}){
-  const[stocks,setStocks]=useState([]);const[form,setForm]=useState({fecha:today(),producto_id:'',cantidad:0});
-  const load=async()=>setStocks(await api.getStocks());
-  useEffect(()=>{load();},[]);
-  const save=async()=>{if(!form.producto_id||!form.fecha){alert('Completá fecha y producto');return;}
+  const[stocks,setStocks]=useState([]);
+  const[form,setForm]=useState({fecha:today(),producto_id:'',cantidad:0,notas:''});
+  const[search,setSearch]=useState('');
+  const[filtroDesde,setFiltroDesde]=useState('');
+  const[filtroHasta,setFiltroHasta]=useState('');
+  const[editing,setEditing]=useState(null); // {id, cantidad, notas}
+  const[loadingEdit,setLoadingEdit]=useState(false);
+
+  const load=useCallback(async()=>{
+    let url='/stocks';
+    const params=[];
+    if(filtroDesde&&filtroHasta) params.push(`desde=${filtroDesde}&hasta=${filtroHasta}`);
+    if(search) params.push(`search=${encodeURIComponent(search)}`);
+    if(params.length) url+='?'+params.join('&');
+    setStocks(await apiFetch(url));
+  },[filtroDesde,filtroHasta,search]);
+
+  useEffect(()=>{load();},[load]);
+
+  const save=async()=>{
+    if(!form.producto_id||!form.fecha){alert('Completá fecha y producto');return;}
     const prod=productos.find(p=>p.id===parseInt(form.producto_id));
-    await api.createStock({...form,producto_id:parseInt(form.producto_id),producto_nombre:prod.nombre,unidad:prod.unidad,cantidad:parseFloat(form.cantidad)||0});load();};
-  const del=async id=>{await api.deleteStock(id);load();};
+    await api.createStock({...form,producto_id:parseInt(form.producto_id),producto_nombre:prod.nombre,unidad:prod.unidad,cantidad:parseFloat(form.cantidad)||0});
+    load();
+  };
+
+  const del=async id=>{if(!confirm('¿Eliminar este registro?'))return;await api.deleteStock(id);load();};
+
+  const saveEdit=async()=>{
+    setLoadingEdit(true);
+    await apiFetch(`/stocks/${editing.id}`,{method:'PUT',body:{cantidad:parseFloat(editing.cantidad)||0,notas:editing.notas||null}});
+    setEditing(null);setLoadingEdit(false);load();
+  };
+
+  const filtered=stocks.filter(s=>!search||s.producto_nombre.toLowerCase().includes(search.toLowerCase()));
+
   return(<div className="page active">
-    <div className="page-header"><h2>Stock semanal</h2><p>Conteo de inventario — cada lunes a la mañana</p></div>
+    <div className="page-header"><h2>Stock semanal</h2><p>Conteo de inventario — incluye lo cargado por el personal desde el link</p></div>
+
+    {/* Registrar */}
     <div className="card"><div className="card-title">Registrar stock</div>
       <div className="form-row">
         <div className="form-field" style={{minWidth:130}}><label>Fecha</label><input type="date" value={form.fecha} onChange={e=>setForm({...form,fecha:e.target.value})}/></div>
@@ -267,18 +298,55 @@ function Stock({productos}){
             {[...productos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=><option key={p.id} value={p.id}>{p.nombre} ({p.unidad})</option>)}
           </select>
         </div>
-        <div className="form-field" style={{minWidth:100}}><label>Cantidad</label><input type="number" min="0" step="0.01" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})}/></div>
+        <div className="form-field" style={{minWidth:90}}><label>Cantidad</label><input type="number" min="0" step="0.01" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})}/></div>
+        <div className="form-field" style={{flex:1,minWidth:120}}><label>Notas (opcional)</label><input value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="ej: fileteado"/></div>
         <button className="btn" onClick={save}>✓ Guardar</button>
       </div>
     </div>
-    <div className="card"><div className="card-title">Historial</div>
-      <div className="table-wrap"><table><thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th></th></tr></thead>
-      <tbody>{!stocks.length&&<tr><td colSpan={4}><div className="empty-state"><div className="icon">📦</div><p>Sin stock.</p></div></td></tr>}
-        {stocks.map(s=>(<tr key={s.id}><td>{fmtDate(s.fecha)}</td><td>{s.producto_nombre}</td>
-          <td><strong>{fmtNum(s.cantidad,2)}</strong> {s.unidad}</td>
-          <td><button className="btn btn-sm btn-danger" onClick={()=>del(s.id)}>🗑</button></td></tr>))}
-      </tbody></table></div>
+
+    {/* Historial con filtros */}
+    <div className="card">
+      <div className="card-title">
+        <span>Historial ({filtered.length} registros)</span>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+          <input placeholder="Buscar producto..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:160}}/>
+          <input type="date" value={filtroDesde} onChange={e=>setFiltroDesde(e.target.value)} title="Desde"/>
+          <input type="date" value={filtroHasta} onChange={e=>setFiltroHasta(e.target.value)} title="Hasta"/>
+          {(filtroDesde||filtroHasta||search)&&<button className="btn btn-sm" onClick={()=>{setFiltroDesde('');setFiltroHasta('');setSearch('');}}>✕ Limpiar</button>}
+        </div>
+      </div>
+      <div className="table-wrap"><table>
+        <thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Notas</th><th></th></tr></thead>
+        <tbody>
+          {!filtered.length&&<tr><td colSpan={5}><div className="empty-state"><div className="icon">📦</div><p>Sin registros. Probá cambiando el filtro de fechas.</p></div></td></tr>}
+          {filtered.map(s=>(
+            <tr key={s.id}>
+              <td>{fmtDate(s.fecha)}</td>
+              <td>{s.producto_nombre}</td>
+              <td>
+                {editing?.id===s.id
+                  ? <input type="number" min="0" step="0.01" value={editing.cantidad} style={{width:90}} onChange={e=>setEditing({...editing,cantidad:e.target.value})}/>
+                  : <strong>{fmtNum(s.cantidad,3)}</strong>} {s.unidad}
+              </td>
+              <td>
+                {editing?.id===s.id
+                  ? <input value={editing.notas||''} style={{width:140}} onChange={e=>setEditing({...editing,notas:e.target.value})} placeholder="notas..."/>
+                  : <span className="text-sm" style={{color:'var(--text3)'}}>{s.notas||'—'}</span>}
+              </td>
+              <td style={{display:'flex',gap:4}}>
+                {editing?.id===s.id
+                  ? <><button className="btn btn-sm btn-primary" onClick={saveEdit} disabled={loadingEdit}>{loadingEdit?'...':'✓'}</button>
+                      <button className="btn btn-sm" onClick={()=>setEditing(null)}>✕</button></>
+                  : <><button className="btn btn-sm" onClick={()=>setEditing({id:s.id,cantidad:s.cantidad,notas:s.notas||''})}>✏️</button>
+                      <button className="btn btn-sm btn-danger" onClick={()=>del(s.id)}>🗑</button></>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
     </div>
+
+    {/* Modal edición */}
   </div>);
 }
 
