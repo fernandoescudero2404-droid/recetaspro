@@ -259,12 +259,10 @@ function Stock({productos}){
 
   const load=useCallback(async()=>{
     let url='/stocks';
-    const params=[];
-    if(filtroDesde&&filtroHasta) params.push(`desde=${filtroDesde}&hasta=${filtroHasta}`);
-    if(search) params.push(`search=${encodeURIComponent(search)}`);
-    if(params.length) url+='?'+params.join('&');
-    setStocks(await apiFetch(url));
-  },[filtroDesde,filtroHasta,search]);
+    if(filtroDesde&&filtroHasta) url+=`?desde=${filtroDesde}&hasta=${filtroHasta}`;
+    const data = await apiFetch(url);
+    setStocks(data);
+  },[filtroDesde,filtroHasta]);
 
   useEffect(()=>{load();},[load]);
 

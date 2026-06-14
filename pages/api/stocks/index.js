@@ -5,7 +5,7 @@ export default requireAuth(async function handler(req, res) {
   const rid = req.restaurante.id;
 
   if (req.method === 'GET') {
-    const { desde, hasta, search } = req.query;
+    const { desde, hasta } = req.query;
     let rows;
     if (desde && hasta) {
       rows = await sql`
@@ -13,15 +13,11 @@ export default requireAuth(async function handler(req, res) {
         WHERE restaurante_id = ${rid} AND fecha BETWEEN ${desde} AND ${hasta}
         ORDER BY fecha DESC, id DESC`;
     } else {
+      // Sin filtro: traer TODOS ordenados por fecha desc
       rows = await sql`
         SELECT * FROM stocks
         WHERE restaurante_id = ${rid}
-        ORDER BY fecha DESC, id DESC
-        LIMIT 500`;
-    }
-    if (search) {
-      const s = search.toLowerCase();
-      rows = rows.filter(r => r.producto_nombre.toLowerCase().includes(s));
+        ORDER BY fecha DESC, id DESC`;
     }
     return res.json(rows);
   }
