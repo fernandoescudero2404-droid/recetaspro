@@ -306,7 +306,7 @@ function Stock({productos}){
   // Solo calcular bruto si el registro NO vino ya convertido desde el link
   // Los convertidos tienen nota que empieza con "Desde "
   const calcBruto = (s) => {
-    if(s.notas && s.notas.startsWith('Desde ')) return null; // ya fue convertido
+    if(s.notas && (s.notas.startsWith('Desde ') || s.notas.startsWith('Calculado desde'))) return null; // ya fue convertido
     const merma = getProdMerma(s.producto_nombre);
     if(merma<=0) return null;
     return parseFloat(s.cantidad) / ((100-merma)/100);
