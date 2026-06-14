@@ -303,10 +303,13 @@ function Stock({productos}){
     return p ? parseFloat(p.merma)||0 : 0;
   };
 
-  const calcBruto = (cantidad, nombre) => {
-    const merma = getProdMerma(nombre);
+  // Solo calcular bruto si el registro NO vino ya convertido desde el link
+  // Los convertidos tienen nota que empieza con "Desde "
+  const calcBruto = (s) => {
+    if(s.notas && s.notas.startsWith('Desde ')) return null; // ya fue convertido
+    const merma = getProdMerma(s.producto_nombre);
     if(merma<=0) return null;
-    return parseFloat(cantidad) / ((100-merma)/100);
+    return parseFloat(s.cantidad) / ((100-merma)/100);
   };
 
   return(<div className="page active">
@@ -342,7 +345,7 @@ function Stock({productos}){
         <tbody>
           {!filtered.length&&<tr><td colSpan={7}><div className="empty-state"><div className="icon">📦</div><p>Sin registros.</p></div></td></tr>}
           {filtered.map(s=>{
-            const bruto = calcBruto(s.cantidad, s.producto_nombre);
+            const bruto = calcBruto(s);
             const merma = getProdMerma(s.producto_nombre);
             return(
               <tr key={s.id}>
