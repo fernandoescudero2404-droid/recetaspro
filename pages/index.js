@@ -254,13 +254,14 @@ function Stock({productos}){
   const[search,setSearch]=useState('');
   const[filtroDesde,setFiltroDesde]=useState('');
   const[filtroHasta,setFiltroHasta]=useState('');
-  const[editing,setEditing]=useState(null); // {id, cantidad, notas}
+  const[editing,setEditing]=useState(null);
   const[loadingEdit,setLoadingEdit]=useState(false);
+  const[detalle,setDetalle]=useState(null); // fecha seleccionada para ver detalle
 
   const load=useCallback(async()=>{
     let url='/stocks';
     if(filtroDesde&&filtroHasta) url+=`?desde=${filtroDesde}&hasta=${filtroHasta}`;
-    const data = await apiFetch(url);
+    const data=await apiFetch(url);
     setStocks(data);
   },[filtroDesde,filtroHasta]);
 
@@ -273,7 +274,7 @@ function Stock({productos}){
     load();
   };
 
-  const del=async id=>{if(!confirm('¿Eliminar este registro?'))return;await api.deleteStock(id);load();};
+  const del=async id=>{if(!confirm('¿Eliminar?'))return;await api.deleteStock(id);load();};
 
   const saveEdit=async()=>{
     setLoadingEdit(true);
@@ -281,13 +282,37 @@ function Stock({productos}){
     setEditing(null);setLoadingEdit(false);load();
   };
 
-  const filtered=stocks.filter(s=>!search||s.producto_nombre.toLowerCase().includes(search.toLowerCase()));
+  // Solo mostrar productos brutos (no las líneas de recetas intermedias)
+  // Las notas "Stock receta intermedia" y "Calculado desde..." son las generadas por el link
+  // Solo mostramos las que NO son la cabecera de intermedia
+  const stocksBrutos = stocks.filter(s=>
+    !s.notas || !s.notas.startsWith('Stock receta intermedia')
+  );
+
+  // Para detalle: agrupar por fecha — mostrar registros de esa fecha
+  const fechas = [...new Set(stocksBrutos.map(s=>s.fecha))].sort((a,b)=>b.localeCompare(a));
+
+  const filtered = stocksBrutos.filter(s=>{
+    const matchSearch = !search || s.producto_nombre.toLowerCase().includes(search.toLowerCase());
+    return matchSearch;
+  });
+
+  // Aplicar merma: si el producto tiene merma, mostrar también el equivalente bruto
+  const getProdMerma = (nombre) => {
+    const p = productos.find(p=>p.nombre===nombre);
+    return p ? parseFloat(p.merma)||0 : 0;
+  };
+
+  const calcBruto = (cantidad, nombre) => {
+    const merma = getProdMerma(nombre);
+    if(merma<=0) return null;
+    return parseFloat(cantidad) / ((100-merma)/100);
+  };
 
   return(<div className="page active">
     <div className="page-header"><h2>Stock semanal</h2><p>Conteo de inventario — incluye lo cargado por el personal desde el link</p></div>
 
-    {/* Registrar */}
-    <div className="card"><div className="card-title">Registrar stock</div>
+    <div className="card"><div className="card-title">Registrar stock manual</div>
       <div className="form-row">
         <div className="form-field" style={{minWidth:130}}><label>Fecha</label><input type="date" value={form.fecha} onChange={e=>setForm({...form,fecha:e.target.value})}/></div>
         <div className="form-field" style={{flex:2,minWidth:200}}><label>Producto</label>
@@ -297,15 +322,14 @@ function Stock({productos}){
           </select>
         </div>
         <div className="form-field" style={{minWidth:90}}><label>Cantidad</label><input type="number" min="0" step="0.01" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})}/></div>
-        <div className="form-field" style={{flex:1,minWidth:120}}><label>Notas (opcional)</label><input value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="ej: fileteado"/></div>
+        <div className="form-field" style={{flex:1,minWidth:120}}><label>Notas</label><input value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="opcional"/></div>
         <button className="btn" onClick={save}>✓ Guardar</button>
       </div>
     </div>
 
-    {/* Historial con filtros */}
     <div className="card">
       <div className="card-title">
-        <span>Historial ({filtered.length} registros)</span>
+        <span>Historial de stock ({filtered.length} registros)</span>
         <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
           <input placeholder="Buscar producto..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:160}}/>
           <input type="date" value={filtroDesde} onChange={e=>setFiltroDesde(e.target.value)} title="Desde"/>
@@ -314,41 +338,44 @@ function Stock({productos}){
         </div>
       </div>
       <div className="table-wrap"><table>
-        <thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Notas</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad neta</th><th>Merma</th><th>Equiv. bruto</th><th>Notas</th><th></th></tr></thead>
         <tbody>
-          {!filtered.length&&<tr><td colSpan={5}><div className="empty-state"><div className="icon">📦</div><p>Sin registros. Probá cambiando el filtro de fechas.</p></div></td></tr>}
-          {filtered.map(s=>(
-            <tr key={s.id}>
-              <td>{fmtDate(s.fecha)}</td>
-              <td>{s.producto_nombre}</td>
-              <td>
-                {editing?.id===s.id
-                  ? <input type="number" min="0" step="0.01" value={editing.cantidad} style={{width:90}} onChange={e=>setEditing({...editing,cantidad:e.target.value})}/>
-                  : <strong>{fmtNum(s.cantidad,3)}</strong>} {s.unidad}
-              </td>
-              <td>
-                {editing?.id===s.id
-                  ? <input value={editing.notas||''} style={{width:140}} onChange={e=>setEditing({...editing,notas:e.target.value})} placeholder="notas..."/>
-                  : <span className="text-sm" style={{color:'var(--text3)'}}>{s.notas||'—'}</span>}
-              </td>
-              <td style={{display:'flex',gap:4}}>
-                {editing?.id===s.id
-                  ? <><button className="btn btn-sm btn-primary" onClick={saveEdit} disabled={loadingEdit}>{loadingEdit?'...':'✓'}</button>
-                      <button className="btn btn-sm" onClick={()=>setEditing(null)}>✕</button></>
-                  : <><button className="btn btn-sm" onClick={()=>setEditing({id:s.id,cantidad:s.cantidad,notas:s.notas||''})}>✏️</button>
-                      <button className="btn btn-sm btn-danger" onClick={()=>del(s.id)}>🗑</button></>}
-              </td>
-            </tr>
-          ))}
+          {!filtered.length&&<tr><td colSpan={7}><div className="empty-state"><div className="icon">📦</div><p>Sin registros.</p></div></td></tr>}
+          {filtered.map(s=>{
+            const bruto = calcBruto(s.cantidad, s.producto_nombre);
+            const merma = getProdMerma(s.producto_nombre);
+            return(
+              <tr key={s.id}>
+                <td>{fmtDate(s.fecha)}</td>
+                <td><strong>{s.producto_nombre}</strong></td>
+                <td>
+                  {editing?.id===s.id
+                    ? <input type="number" min="0" step="0.01" value={editing.cantidad} style={{width:80}} onChange={e=>setEditing({...editing,cantidad:e.target.value})}/>
+                    : <strong>{fmtNum(s.cantidad,3)}</strong>} {s.unidad}
+                </td>
+                <td>{merma>0?<span className={`badge ${merma>30?'badge-amber':merma>15?'badge-blue':'badge-green'}`}>{merma}%</span>:'—'}</td>
+                <td>{bruto?<span style={{color:'var(--text2)',fontSize:13}}>{fmtNum(bruto,3)} {s.unidad}</span>:'—'}</td>
+                <td>
+                  {editing?.id===s.id
+                    ? <input value={editing.notas||''} style={{width:120}} onChange={e=>setEditing({...editing,notas:e.target.value})} placeholder="notas..."/>
+                    : <span className="text-sm" style={{color:'var(--text3)'}}>{s.notas||'—'}</span>}
+                </td>
+                <td style={{display:'flex',gap:4}}>
+                  {editing?.id===s.id
+                    ? <><button className="btn btn-sm btn-primary" onClick={saveEdit} disabled={loadingEdit}>{loadingEdit?'...':'✓'}</button>
+                        <button className="btn btn-sm" onClick={()=>setEditing(null)}>✕</button></>
+                    : <><button className="btn btn-sm" onClick={()=>setEditing({id:s.id,cantidad:s.cantidad,notas:s.notas||''})}>✏️</button>
+                        <button className="btn btn-sm btn-danger" onClick={()=>del(s.id)}>🗑</button></>}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table></div>
     </div>
-
-    {/* Modal edición */}
   </div>);
 }
 
-// ── LINK DE STOCK PÚBLICO ─────────────────────────────────
 function StockLink({productos}){
   const[config,setConfig]=useState(null);const[saving,setSaving]=useState(false);const[copied,setCopied]=useState(false);
   const[prods,setProds]=useState([]);const[ints,setInts]=useState([]);const[tabSel,setTabSel]=useState('brutos');
