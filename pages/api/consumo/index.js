@@ -1,14 +1,19 @@
 import sql from '../../../lib/db';
 import { requireAuth } from '../../../lib/auth';
 
-async function expandirIngredientes(ingredientes, productos, intermedias, visited = new Set()) {
+// Expande ingredientes recursivamente soportando: producto, intermedia, final
+async function expandirIngredientes(ingredientes, productos, intermedias, finales, visited = new Set()) {
   const resultado = {};
 
   for (const ing of ingredientes) {
-    if (ing.tipo === 'producto') {
-      const prod = productos.find(p => p.id === ing.ref_id);
+    const tipo = ing.tipo;
+    const refId = ing.ref_id;
+    const factor = parseFloat(ing.cantidad) || 1;
+
+    if (tipo === 'producto') {
+      const prod = productos.find(p => p.id === refId);
       if (!prod) continue;
-      const qty = parseFloat(ing.cantidad) || 0;
+      const qty = factor;
       const merma = parseFloat(prod.merma) || 0;
       const bruto = qty / ((100 - merma) / 100);
       const key = `prod_${prod.id}`;
@@ -16,14 +21,26 @@ async function expandirIngredientes(ingredientes, productos, intermedias, visite
       resultado[key].cantidad += qty;
       resultado[key].bruto += bruto;
 
-    } else if (ing.tipo === 'intermedia') {
-      if (visited.has(ing.ref_id)) continue; // evitar ciclos
-      const receta = intermedias.find(r => r.id === ing.ref_id);
+    } else if (tipo === 'intermedia') {
+      if (visited.has(`i_${refId}`)) continue;
+      const receta = intermedias.find(r => r.id === refId);
       if (!receta) continue;
       const newVisited = new Set(visited);
-      newVisited.add(ing.ref_id);
-      const factor = parseFloat(ing.cantidad) || 1;
-      const sub = await expandirIngredientes(receta.ingredientes || [], productos, intermedias, newVisited);
+      newVisited.add(`i_${refId}`);
+      const sub = await expandirIngredientes(receta.ingredientes || [], productos, intermedias, finales, newVisited);
+      for (const [k, v] of Object.entries(sub)) {
+        if (!resultado[k]) resultado[k] = { ...v, cantidad: 0, bruto: 0 };
+        resultado[k].cantidad += v.cantidad * factor;
+        resultado[k].bruto += v.bruto * factor;
+      }
+
+    } else if (tipo === 'final') {
+      if (visited.has(`f_${refId}`)) continue;
+      const plato = finales.find(f => f.id === refId);
+      if (!plato) continue;
+      const newVisited = new Set(visited);
+      newVisited.add(`f_${refId}`);
+      const sub = await expandirIngredientes(plato.ingredientes || [], productos, intermedias, finales, newVisited);
       for (const [k, v] of Object.entries(sub)) {
         if (!resultado[k]) resultado[k] = { ...v, cantidad: 0, bruto: 0 };
         resultado[k].cantidad += v.cantidad * factor;
@@ -40,7 +57,6 @@ export default requireAuth(async function handler(req, res) {
   const { desde, hasta } = req.query;
   if (!desde || !hasta) return res.status(400).json({ error: 'Faltan fechas desde/hasta' });
 
-  // Cargar todo en paralelo
   const [ventas, productos, intermediasRaw, finalesRaw] = await Promise.all([
     sql`SELECT * FROM ventas WHERE restaurante_id=${rid} AND fecha BETWEEN ${desde} AND ${hasta}`,
     sql`SELECT * FROM productos WHERE restaurante_id=${rid}`,
@@ -61,19 +77,17 @@ export default requireAuth(async function handler(req, res) {
   const intermedias = intermediasRaw.map(r => ({ ...r, ingredientes: ingsInt.filter(i => i.receta_id === r.id) }));
   const finales = finalesRaw.map(r => ({ ...r, ingredientes: ingsFin.filter(i => i.receta_id === r.id) }));
 
-  // Agrupar ventas por plato
   const porPlato = {};
   for (const v of ventas) {
     if (!porPlato[v.receta_final_id]) porPlato[v.receta_final_id] = { nombre: v.receta_nombre, cantidad: 0 };
     porPlato[v.receta_final_id].cantidad += parseInt(v.cantidad);
   }
 
-  // Calcular consumo total
   const consumoTotal = {};
   for (const [pid, info] of Object.entries(porPlato)) {
     const plato = finales.find(f => f.id === parseInt(pid));
     if (!plato) continue;
-    const ing = await expandirIngredientes(plato.ingredientes, productos, intermedias);
+    const ing = await expandirIngredientes(plato.ingredientes, productos, intermedias, finales);
     for (const [k, v] of Object.entries(ing)) {
       if (!consumoTotal[k]) consumoTotal[k] = { ...v, cantidad: 0, bruto: 0 };
       consumoTotal[k].cantidad += v.cantidad * info.cantidad;
