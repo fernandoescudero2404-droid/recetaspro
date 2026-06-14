@@ -1,0 +1,25 @@
+{
+  "name": "recetaspro",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:init": "node lib/db-init.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.3",
+    "bcryptjs": "^2.4.3",
+    "date-fns": "^3.6.0",
+    "dotenv": "^17.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "next": "14.2.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.6"
+  }
+}
