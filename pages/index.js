@@ -1,24 +1,22 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const today = () => new Date().toISOString().split('T')[0];
-const mondayOfWeek = () => { const d = new Date(); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d.toISOString().split('T')[0]; };
+const mondayOfWeek = () => { const d=new Date(); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d.toISOString().split('T')[0]; };
 const addDays = (date,n) => { const d=new Date(date); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; };
 const fmtDate = iso => { if(!iso) return '—'; const [y,m,d]=iso.split('-'); return `${d}/${m}/${y}`; };
 
-function getToken(){ return typeof window!=='undefined' ? localStorage.getItem('rp_token') : null; }
-
-async function apiFetch(path, opts={}){
-  const token = getToken();
-  const res = await fetch('/api'+path, {
+function getToken(){ return typeof window!=='undefined'?localStorage.getItem('rp_token'):null; }
+async function apiFetch(path,opts={}){
+  const token=getToken();
+  const res=await fetch('/api'+path,{
     ...opts,
-    headers:{ 'Content-Type':'application/json', ...(token?{Authorization:`Bearer ${token}`}:{}), ...(opts.headers||{}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{}),...(opts.headers||{})},
+    body:opts.body?JSON.stringify(opts.body):undefined,
   });
-  if(!res.ok){ const e=await res.json().catch(()=>({error:'Error'})); throw new Error(e.error||`HTTP ${res.status}`); }
+  if(!res.ok){const e=await res.json().catch(()=>({error:'Error'}));throw new Error(e.error||`HTTP ${res.status}`);}
   return res.json();
 }
-
-const api = {
+const api={
   login:(u,p)=>apiFetch('/auth/login',{method:'POST',body:{username:u,password:p}}),
   getProductos:()=>apiFetch('/productos'),
   createProducto:d=>apiFetch('/productos',{method:'POST',body:d}),
@@ -53,6 +51,64 @@ function Modal({title,onClose,children,wide}){
   );
 }
 
+// ─── Buscador autocomplete ───────────────────────────────
+function BuscadorPlato({finales, value, onChange}){
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const ref = useRef(null);
+
+  const filtered = finales.filter(p=>p.nombre.toLowerCase().includes(query.toLowerCase())).slice(0,12);
+
+  useEffect(()=>{
+    // Cerrar si click fuera
+    const handler = e => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return ()=>document.removeEventListener('mousedown', handler);
+  },[]);
+
+  const select = (p) => {
+    onChange(p);
+    setQuery(p.nombre);
+    setOpen(false);
+  };
+
+  const handleKey = e => {
+    if(!open) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); setCursor(c=>Math.min(c+1,filtered.length-1)); }
+    if(e.key==='ArrowUp'){ e.preventDefault(); setCursor(c=>Math.max(c-1,0)); }
+    if(e.key==='Enter' && filtered[cursor]){ e.preventDefault(); select(filtered[cursor]); }
+    if(e.key==='Escape'){ setOpen(false); }
+  };
+
+  return(
+    <div ref={ref} style={{position:'relative',flex:2,minWidth:200}}>
+      <div className="form-field">
+        <label>Plato</label>
+        <input
+          value={query}
+          onChange={e=>{ setQuery(e.target.value); setOpen(true); setCursor(0); onChange(null); }}
+          onFocus={()=>setOpen(true)}
+          onKeyDown={handleKey}
+          placeholder="Escribí para buscar..."
+          autoComplete="off"
+        />
+      </div>
+      {open && filtered.length>0 && (
+        <div style={{position:'absolute',top:'100%',left:0,right:0,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',boxShadow:'0 4px 12px rgba(0,0,0,.12)',zIndex:50,maxHeight:280,overflowY:'auto'}}>
+          {filtered.map((p,i)=>(
+            <div key={p.id}
+              onMouseDown={()=>select(p)}
+              style={{padding:'7px 12px',fontSize:13,cursor:'pointer',background:i===cursor?'var(--bg3)':'transparent',borderBottom:'1px solid var(--border)'}}
+              onMouseEnter={()=>setCursor(i)}
+            >{p.nombre}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── IngRow ──────────────────────────────────────────────
 function IngRow({ing,idx,productos,intermedias,finales,onChange,onRemove,allowFinal}){
   return(
@@ -76,7 +132,7 @@ function IngRow({ing,idx,productos,intermedias,finales,onChange,onRemove,allowFi
       <div className="form-field" style={{minWidth:70}}>
         <label style={{fontSize:11}}>Unidad</label>
         <select value={ing.unidad} onChange={e=>onChange(idx,{...ing,unidad:e.target.value})}>
-          {['kg','g','unidad','litro','ml','porcion','grs','lts','und'].map(u=><option key={u}>{u}</option>)}
+          {['kg','g','unidad','litro','ml','porcion','grs','lts','und','roll'].map(u=><option key={u}>{u}</option>)}
         </select>
       </div>
       <button className="btn btn-sm btn-danger" onClick={()=>onRemove(idx)} style={{marginBottom:1}}>×</button>
@@ -93,9 +149,8 @@ function Productos({data,onRefresh}){
   const[error,setError]=useState('');
   const[search,setSearch]=useState('');
 
-  const openNew=()=>{ setEditing(null); setForm({nombre:'',unidad:'kg',merma:'',notas:''}); setError(''); setModal(true); };
-  const openEdit=p=>{ setEditing(p); setForm({nombre:p.nombre,unidad:p.unidad,merma:p.merma,notas:p.notas||''}); setError(''); setModal(true); };
-
+  const openNew=()=>{setEditing(null);setForm({nombre:'',unidad:'kg',merma:'',notas:''});setError('');setModal(true);};
+  const openEdit=p=>{setEditing(p);setForm({nombre:p.nombre,unidad:p.unidad,merma:p.merma,notas:p.notas||''});setError('');setModal(true);};
   const save=async()=>{
     if(!form.nombre.trim()){setError('Ingresá el nombre');return;}
     setLoading(true);setError('');
@@ -106,10 +161,8 @@ function Productos({data,onRefresh}){
     }catch(e){setError(e.message);}
     setLoading(false);
   };
-
-  const del=async id=>{ if(!confirm('¿Eliminar?'))return; await api.deleteProducto(id); onRefresh(); };
-
-  const filtered = data.filter(p=>p.nombre.toLowerCase().includes(search.toLowerCase()));
+  const del=async id=>{if(!confirm('¿Eliminar?'))return;await api.deleteProducto(id);onRefresh();};
+  const filtered=data.filter(p=>p.nombre.toLowerCase().includes(search.toLowerCase()));
 
   return(
     <div className="page active">
@@ -122,34 +175,32 @@ function Productos({data,onRefresh}){
             <button className="btn btn-sm" onClick={openNew}>+ Nuevo</button>
           </div>
         </div>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>SKU</th><th>Producto</th><th>Unidad</th><th>Merma</th><th>Rendimiento</th><th></th></tr></thead>
-            <tbody>
-              {!filtered.length&&<tr><td colSpan={6}><div className="empty-state"><div className="icon">📦</div><p>Sin resultados.</p></div></td></tr>}
-              {filtered.map(p=>(
-                <tr key={p.id}>
-                  <td><span className="badge badge-gray" style={{fontSize:10}}>{p.notas||'—'}</span></td>
-                  <td><strong>{p.nombre}</strong></td>
-                  <td>{p.unidad}</td>
-                  <td><span className={`badge ${p.merma>30?'badge-amber':p.merma>15?'badge-blue':'badge-green'}`}>{p.merma}%</span></td>
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm">{(100-p.merma).toFixed(0)}%</span>
-                      <div className="progress-bar" style={{flex:1,minWidth:50}}>
-                        <div className="progress-fill" style={{width:`${100-p.merma}%`,background:p.merma>30?'var(--warn)':p.merma>15?'var(--blue)':'var(--success)'}}/>
-                      </div>
+        <div className="table-wrap"><table>
+          <thead><tr><th>SKU</th><th>Producto</th><th>Unidad</th><th>Merma</th><th>Rendimiento</th><th></th></tr></thead>
+          <tbody>
+            {!filtered.length&&<tr><td colSpan={6}><div className="empty-state"><div className="icon">📦</div><p>Sin resultados.</p></div></td></tr>}
+            {filtered.map(p=>(
+              <tr key={p.id}>
+                <td><span className="badge badge-gray" style={{fontSize:10}}>{p.notas||'—'}</span></td>
+                <td><strong>{p.nombre}</strong></td>
+                <td>{p.unidad}</td>
+                <td><span className={`badge ${p.merma>30?'badge-amber':p.merma>15?'badge-blue':'badge-green'}`}>{p.merma}%</span></td>
+                <td>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">{(100-p.merma).toFixed(0)}%</span>
+                    <div className="progress-bar" style={{flex:1,minWidth:50}}>
+                      <div className="progress-fill" style={{width:`${100-p.merma}%`,background:p.merma>30?'var(--warn)':p.merma>15?'var(--blue)':'var(--success)'}}/>
                     </div>
-                  </td>
-                  <td style={{display:'flex',gap:4}}>
-                    <button className="btn btn-sm" onClick={()=>openEdit(p)}>✏️</button>
-                    <button className="btn btn-sm btn-danger" onClick={()=>del(p.id)}>🗑</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </td>
+                <td style={{display:'flex',gap:4}}>
+                  <button className="btn btn-sm" onClick={()=>openEdit(p)}>✏️</button>
+                  <button className="btn btn-sm btn-danger" onClick={()=>del(p.id)}>🗑</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
       </div>
       {modal&&(
         <Modal title={editing?'Editar producto':'Nuevo producto bruto'} onClose={()=>setModal(false)}>
@@ -161,7 +212,7 @@ function Productos({data,onRefresh}){
               </select>
             </div>
             <div className="form-field"><label>Merma (%)</label><input type="number" min="0" max="100" step="0.01" value={form.merma} onChange={e=>setForm({...form,merma:e.target.value})} placeholder="ej: 15.30"/></div>
-            <div className="form-field"><label>SKU / Notas</label><input value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="ej: LANx"/></div>
+            <div className="form-field"><label>SKU / Notas</label><input value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="ej: LANX"/></div>
           </div>
           {error&&<p className="login-error">{error}</p>}
           <button className="btn btn-primary btn-block mt-1" onClick={save} disabled={loading}>{loading?'Guardando...':editing?'Guardar cambios':'Crear producto'}</button>
@@ -182,13 +233,16 @@ function Intermedias({data,productos,onRefresh}){
   const[search,setSearch]=useState('');
   const[expanded,setExpanded]=useState(null);
 
-  const openNew=()=>{ setEditing(null); setForm({nombre:'',rinde:''}); setIngs([]); setError(''); setModal(true); };
-  const openEdit=r=>{ setEditing(r); setForm({nombre:r.nombre,rinde:r.rinde||''}); setIngs((r.ingredientes||[]).map(i=>({tipo:i.tipo,ref_id:i.ref_id,cantidad:i.cantidad,unidad:i.unidad}))); setError(''); setModal(true); };
+  const openNew=()=>{setEditing(null);setForm({nombre:'',rinde:''});setIngs([]);setError('');setModal(true);};
+  const openEdit=r=>{setEditing(r);setForm({nombre:r.nombre,rinde:r.rinde||''});setIngs((r.ingredientes||[]).map(i=>({tipo:i.tipo,ref_id:i.ref_id,cantidad:i.cantidad,unidad:i.unidad})));setError('');setModal(true);};
   const addIng=()=>setIngs([...ings,{tipo:'producto',ref_id:0,cantidad:'',unidad:'kg'}]);
-  const updateIng=(i,v)=>{ const a=[...ings];a[i]=v;setIngs(a); };
+  const updateIng=(i,v)=>{const a=[...ings];a[i]=v;setIngs(a);};
   const removeIng=i=>setIngs(ings.filter((_,idx)=>idx!==i));
 
-  const resolveNombre=(tipo,ref_id)=>{ if(tipo==='producto') return productos.find(p=>p.id===ref_id)?.nombre||'?'; return data.find(r=>r.id===ref_id)?.nombre||'?'; };
+  const resolveNombre=(tipo,ref_id)=>{
+    if(tipo==='producto') return productos.find(p=>p.id===ref_id)?.nombre||'?';
+    return data.find(r=>r.id===ref_id)?.nombre||'?';
+  };
 
   const save=async()=>{
     if(!form.nombre.trim()){setError('Ingresá el nombre');return;}
@@ -201,13 +255,12 @@ function Intermedias({data,productos,onRefresh}){
     }catch(e){setError(e.message);}
     setLoading(false);
   };
-
-  const del=async id=>{ if(!confirm('¿Eliminar?'))return; await api.deleteIntermedia(id); onRefresh(); };
+  const del=async id=>{if(!confirm('¿Eliminar?'))return;await api.deleteIntermedia(id);onRefresh();};
   const filtered=data.filter(r=>r.nombre.toLowerCase().includes(search.toLowerCase()));
 
   return(
     <div className="page active">
-      <div className="page-header"><h2>Recetas intermedias</h2><p>Preparaciones base reutilizables en otras recetas</p></div>
+      <div className="page-header"><h2>Recetas intermedias</h2><p>Preparaciones base a 1kg — reutilizables en platos</p></div>
       <div className="card">
         <div className="card-title">
           <span>Intermedias ({filtered.length})</span>
@@ -216,42 +269,40 @@ function Intermedias({data,productos,onRefresh}){
             <button className="btn btn-sm" onClick={openNew}>+ Nueva</button>
           </div>
         </div>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Nombre</th><th>Rinde</th><th>Ingredientes</th><th></th></tr></thead>
-            <tbody>
-              {!filtered.length&&<tr><td colSpan={4}><div className="empty-state"><div className="icon">🧪</div><p>Sin resultados.</p></div></td></tr>}
-              {filtered.map(r=>(
-                <>
-                  <tr key={r.id}>
-                    <td><strong style={{cursor:'pointer'}} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>{expanded===r.id?'▾':'▸'} {r.nombre}</strong></td>
-                    <td><span className="badge badge-gray">{r.rinde||'—'}</span></td>
-                    <td><span className="text-sm">{(r.ingredientes||[]).length} ingredientes</span></td>
-                    <td style={{display:'flex',gap:4}}>
-                      <button className="btn btn-sm" onClick={()=>openEdit(r)}>✏️</button>
-                      <button className="btn btn-sm btn-danger" onClick={()=>del(r.id)}>🗑</button>
+        <div className="table-wrap"><table>
+          <thead><tr><th>Nombre</th><th>Rinde</th><th>Ingredientes</th><th></th></tr></thead>
+          <tbody>
+            {!filtered.length&&<tr><td colSpan={4}><div className="empty-state"><div className="icon">🧪</div><p>Sin resultados.</p></div></td></tr>}
+            {filtered.map(r=>(
+              <>
+                <tr key={r.id}>
+                  <td><strong style={{cursor:'pointer'}} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>{expanded===r.id?'▾':'▸'} {r.nombre}</strong></td>
+                  <td><span className="badge badge-gray">{r.rinde||'1 kg'}</span></td>
+                  <td><span className="text-sm">{(r.ingredientes||[]).length} ingredientes</span></td>
+                  <td style={{display:'flex',gap:4}}>
+                    <button className="btn btn-sm" onClick={()=>openEdit(r)}>✏️</button>
+                    <button className="btn btn-sm btn-danger" onClick={()=>del(r.id)}>🗑</button>
+                  </td>
+                </tr>
+                {expanded===r.id&&(
+                  <tr key={`exp-${r.id}`}>
+                    <td colSpan={4} style={{background:'var(--bg3)',padding:'8px 16px'}}>
+                      {(r.ingredientes||[]).map((ing,i)=>(
+                        <span key={i} className="tag">{ing.tipo==='intermedia'?'🧪':'📦'} {resolveNombre(ing.tipo,ing.ref_id)} — {parseFloat(ing.cantidad).toFixed(4)} {ing.unidad}</span>
+                      ))}
                     </td>
                   </tr>
-                  {expanded===r.id&&(
-                    <tr key={`exp-${r.id}`}>
-                      <td colSpan={4} style={{background:'var(--bg3)',padding:'8px 16px'}}>
-                        {(r.ingredientes||[]).map((ing,i)=>(
-                          <span key={i} className="tag">{resolveNombre(ing.tipo,ing.ref_id)} — {parseFloat(ing.cantidad).toFixed(4)} {ing.unidad}</span>
-                        ))}
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                )}
+              </>
+            ))}
+          </tbody>
+        </table></div>
       </div>
       {modal&&(
         <Modal title={editing?'Editar receta intermedia':'Nueva receta intermedia'} onClose={()=>setModal(false)} wide>
           <div className="form-grid mb-1">
             <div className="form-field"><label>Nombre</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="ej: Vinagreta"/></div>
-            <div className="form-field"><label>Rendimiento</label><input value={form.rinde} onChange={e=>setForm({...form,rinde:e.target.value})} placeholder="ej: 500g"/></div>
+            <div className="form-field"><label>Rendimiento</label><input value={form.rinde} onChange={e=>setForm({...form,rinde:e.target.value})} placeholder="ej: 1 kg"/></div>
           </div>
           <div className="card-title" style={{fontSize:13}}>Ingredientes</div>
           {ings.map((ing,i)=><IngRow key={i} ing={ing} idx={i} productos={productos} intermedias={data} finales={[]} onChange={updateIng} onRemove={removeIng} allowFinal={false}/>)}
@@ -275,17 +326,20 @@ function Finales({data,productos,intermedias,onRefresh}){
   const[search,setSearch]=useState('');
   const[expanded,setExpanded]=useState(null);
 
-  const openNew=()=>{ setEditing(null); setNombre(''); setIngs([]); setError(''); setModal(true); };
-  const openEdit=r=>{ setEditing(r); setNombre(r.nombre); setIngs((r.ingredientes||[]).map(i=>({tipo:i.tipo,ref_id:i.ref_id,cantidad:i.cantidad,unidad:i.unidad}))); setError(''); setModal(true); };
+  const openNew=()=>{setEditing(null);setNombre('');setIngs([]);setError('');setModal(true);};
+  const openEdit=r=>{setEditing(r);setNombre(r.nombre);setIngs((r.ingredientes||[]).map(i=>({tipo:i.tipo,ref_id:i.ref_id,cantidad:i.cantidad,unidad:i.unidad})));setError('');setModal(true);};
   const addIng=()=>setIngs([...ings,{tipo:'producto',ref_id:0,cantidad:'',unidad:'kg'}]);
-  const updateIng=(i,v)=>{ const a=[...ings];a[i]=v;setIngs(a); };
+  const updateIng=(i,v)=>{const a=[...ings];a[i]=v;setIngs(a);};
   const removeIng=i=>setIngs(ings.filter((_,idx)=>idx!==i));
 
+  // Resuelve nombre para los 3 tipos: producto, intermedia, final
   const resolveNombre=(tipo,ref_id)=>{
-    if(tipo==='producto') return productos.find(p=>p.id===ref_id)?.nombre||'?';
-    if(tipo==='intermedia') return intermedias.find(r=>r.id===ref_id)?.nombre||'?';
-    return data.find(r=>r.id===ref_id)?.nombre||'?';
+    if(tipo==='producto') return productos.find(p=>p.id===ref_id)?.nombre||`?prod(${ref_id})`;
+    if(tipo==='intermedia') return intermedias.find(r=>r.id===ref_id)?.nombre||`?int(${ref_id})`;
+    if(tipo==='final') return data.find(r=>r.id===ref_id)?.nombre||`?final(${ref_id})`;
+    return '?';
   };
+  const tipoIcon=tipo=>tipo==='intermedia'?'🧪':tipo==='final'?'🍽️':'📦';
 
   const save=async()=>{
     if(!nombre.trim()){setError('Ingresá el nombre');return;}
@@ -298,8 +352,7 @@ function Finales({data,productos,intermedias,onRefresh}){
     }catch(e){setError(e.message);}
     setLoading(false);
   };
-
-  const del=async id=>{ if(!confirm('¿Eliminar?'))return; await api.deleteFinal(id); onRefresh(); };
+  const del=async id=>{if(!confirm('¿Eliminar?'))return;await api.deleteFinal(id);onRefresh();};
   const filtered=data.filter(r=>r.nombre.toLowerCase().includes(search.toLowerCase()));
 
   return(
@@ -313,37 +366,36 @@ function Finales({data,productos,intermedias,onRefresh}){
             <button className="btn btn-sm" onClick={openNew}>+ Nuevo</button>
           </div>
         </div>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Plato</th><th>Ingredientes</th><th></th></tr></thead>
-            <tbody>
-              {!filtered.length&&<tr><td colSpan={3}><div className="empty-state"><div className="icon">🍽️</div><p>Sin resultados.</p></div></td></tr>}
-              {filtered.map(r=>(
-                <>
-                  <tr key={r.id}>
-                    <td><strong style={{cursor:'pointer'}} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>{expanded===r.id?'▾':'▸'} {r.nombre}</strong></td>
-                    <td><span className="text-sm">{(r.ingredientes||[]).length} ingredientes</span></td>
-                    <td style={{display:'flex',gap:4}}>
-                      <button className="btn btn-sm" onClick={()=>openEdit(r)}>✏️</button>
-                      <button className="btn btn-sm btn-danger" onClick={()=>del(r.id)}>🗑</button>
+        <div className="table-wrap"><table>
+          <thead><tr><th>Plato</th><th>Ingredientes</th><th></th></tr></thead>
+          <tbody>
+            {!filtered.length&&<tr><td colSpan={3}><div className="empty-state"><div className="icon">🍽️</div><p>Sin resultados.</p></div></td></tr>}
+            {filtered.map(r=>(
+              <>
+                <tr key={r.id}>
+                  <td><strong style={{cursor:'pointer'}} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>{expanded===r.id?'▾':'▸'} {r.nombre}</strong></td>
+                  <td><span className="text-sm">{(r.ingredientes||[]).length} ingredientes</span></td>
+                  <td style={{display:'flex',gap:4}}>
+                    <button className="btn btn-sm" onClick={()=>openEdit(r)}>✏️</button>
+                    <button className="btn btn-sm btn-danger" onClick={()=>del(r.id)}>🗑</button>
+                  </td>
+                </tr>
+                {expanded===r.id&&(
+                  <tr key={`exp-${r.id}`}>
+                    <td colSpan={3} style={{background:'var(--bg3)',padding:'8px 16px'}}>
+                      {(r.ingredientes||[]).length===0 && <span className="text-sm">Sin ingredientes</span>}
+                      {(r.ingredientes||[]).map((ing,i)=>(
+                        <span key={i} className="tag">
+                          {tipoIcon(ing.tipo)} {resolveNombre(ing.tipo,ing.ref_id)} — {parseFloat(ing.cantidad).toFixed(3)} {ing.unidad}
+                        </span>
+                      ))}
                     </td>
                   </tr>
-                  {expanded===r.id&&(
-                    <tr key={`exp-${r.id}`}>
-                      <td colSpan={3} style={{background:'var(--bg3)',padding:'8px 16px'}}>
-                        {(r.ingredientes||[]).map((ing,i)=>(
-                          <span key={i} className="tag">
-                            {ing.tipo==='intermedia'?'🧪':ing.tipo==='final'?'🍽️':'📦'} {resolveNombre(ing.tipo,ing.ref_id)} — {parseFloat(ing.cantidad).toFixed(4)} {ing.unidad}
-                          </span>
-                        ))}
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                )}
+              </>
+            ))}
+          </tbody>
+        </table></div>
       </div>
       {modal&&(
         <Modal title={editing?'Editar plato':'Nuevo plato final'} onClose={()=>setModal(false)} wide>
@@ -362,42 +414,74 @@ function Finales({data,productos,intermedias,onRefresh}){
 // ─── VENTAS ──────────────────────────────────────────────
 function Ventas({finales}){
   const[ventas,setVentas]=useState([]);
-  const[form,setForm]=useState({fecha:today(),receta_final_id:'',cantidad:1});
+  const[platoSel,setPlatoSel]=useState(null); // plato objeto seleccionado
+  const[fecha,setFecha]=useState(today());
+  const[cantidad,setCantidad]=useState(1);
+  const[nota,setNota]=useState(''); // nota libre (para armalas como quieras, etc)
   const[loading,setLoading]=useState(false);
-  const load=useCallback(async()=>{ const d=await api.getVentas(); setVentas(d); },[]);
+
+  const load=useCallback(async()=>{const d=await api.getVentas();setVentas(d);},[]);
   useEffect(()=>{load();},[load]);
+
   const save=async()=>{
-    if(!form.receta_final_id||!form.fecha){alert('Completá fecha y plato');return;}
+    if(!platoSel||!fecha){alert('Seleccioná fecha y plato');return;}
     setLoading(true);
-    const plato=finales.find(f=>f.id===parseInt(form.receta_final_id));
-    await api.createVenta({...form,receta_final_id:parseInt(form.receta_final_id),receta_nombre:plato.nombre,cantidad:parseInt(form.cantidad)||1});
-    setLoading(false); load();
+    await api.createVenta({
+      fecha,
+      receta_final_id: platoSel.id,
+      receta_nombre: platoSel.nombre + (nota ? ` (${nota})` : ''),
+      cantidad: parseInt(cantidad)||1,
+    });
+    setLoading(false);
+    setPlatoSel(null);
+    setNota('');
+    setCantidad(1);
+    load();
   };
-  const del=async id=>{ await api.deleteVenta(id); load(); };
+
+  const del=async id=>{await api.deleteVenta(id);load();};
+
   return(
     <div className="page active">
       <div className="page-header"><h2>Carga de ventas</h2><p>Registrá las ventas diarias de cada plato</p></div>
       <div className="card">
         <div className="card-title">Registrar venta</div>
-        <div className="form-row">
-          <div className="form-field" style={{minWidth:130}}><label>Fecha</label><input type="date" value={form.fecha} onChange={e=>setForm({...form,fecha:e.target.value})}/></div>
-          <div className="form-field" style={{flex:2,minWidth:200}}><label>Plato</label>
-            <select value={form.receta_final_id} onChange={e=>setForm({...form,receta_final_id:e.target.value})}>
-              <option value="">— Seleccioná un plato —</option>
-              {[...finales].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
-            </select>
+        <div className="form-row" style={{alignItems:'flex-end'}}>
+          <div className="form-field" style={{minWidth:130}}>
+            <label>Fecha</label>
+            <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)}/>
           </div>
-          <div className="form-field" style={{minWidth:90}}><label>Cantidad</label><input type="number" min="1" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})}/></div>
-          <button className="btn" onClick={save} disabled={loading}>{loading?'...':'✓ Registrar'}</button>
+          <BuscadorPlato finales={finales} value={platoSel} onChange={p=>{setPlatoSel(p);setNota('');}}/>
+          <div className="form-field" style={{minWidth:80}}>
+            <label>Cantidad</label>
+            <input type="number" min="1" value={cantidad} onChange={e=>setCantidad(e.target.value)}/>
+          </div>
+          <button className="btn" onClick={save} disabled={loading||!platoSel}>{loading?'...':'✓ Registrar'}</button>
         </div>
+        {/* Nota libre — útil para "Armala como quieras", especificar variedades o detalles */}
+        {platoSel&&(
+          <div style={{marginTop:10}}>
+            <div className="form-field">
+              <label>Nota / detalle (opcional) — ej: cantidad de rolls o variedades elegidas</label>
+              <input value={nota} onChange={e=>setNota(e.target.value)} placeholder="ej: 2 rolls salmón, 1 langostinos — o dejá vacío"/>
+            </div>
+          </div>
+        )}
       </div>
       <div className="card">
         <div className="card-title">Ventas recientes</div>
         <div className="table-wrap"><table>
-          <thead><tr><th>Fecha</th><th>Plato</th><th>Cantidad</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Plato / Detalle</th><th>Cant.</th><th></th></tr></thead>
           <tbody>
             {!ventas.length&&<tr><td colSpan={4}><div className="empty-state"><div className="icon">💰</div><p>Sin ventas aún.</p></div></td></tr>}
-            {ventas.map(v=><tr key={v.id}><td>{fmtDate(v.fecha)}</td><td>{v.receta_nombre}</td><td><strong>{v.cantidad}</strong></td><td><button className="btn btn-sm btn-danger" onClick={()=>del(v.id)}>🗑</button></td></tr>)}
+            {ventas.map(v=>(
+              <tr key={v.id}>
+                <td>{fmtDate(v.fecha)}</td>
+                <td>{v.receta_nombre}</td>
+                <td><strong>{v.cantidad}</strong></td>
+                <td><button className="btn btn-sm btn-danger" onClick={()=>del(v.id)}>🗑</button></td>
+              </tr>
+            ))}
           </tbody>
         </table></div>
       </div>
@@ -417,7 +501,7 @@ function Stock({productos}){
     await api.createStock({...form,producto_id:parseInt(form.producto_id),producto_nombre:prod.nombre,unidad:prod.unidad,cantidad:parseFloat(form.cantidad)||0});
     load();
   };
-  const del=async id=>{ await api.deleteStock(id); load(); };
+  const del=async id=>{await api.deleteStock(id);load();};
   return(
     <div className="page active">
       <div className="page-header"><h2>Stock semanal</h2><p>Conteo de inventario — se recomienda cada lunes a la mañana</p></div>
@@ -460,6 +544,9 @@ function Consumo(){
   const[result,setResult]=useState(null);
   const[loading,setLoading]=useState(false);
   const[error,setError]=useState('');
+  // Filtro de productos
+  const[filtroActivo,setFiltroActivo]=useState(false);
+  const[productosFiltro,setProductosFiltro]=useState(new Set()); // nombres seleccionados
 
   const calcular=async()=>{
     let desde,hasta;
@@ -472,6 +559,20 @@ function Consumo(){
     catch(e){setError(e.message);}
     setLoading(false);
   };
+
+  const toggleFiltroProducto=nombre=>{
+    setProductosFiltro(prev=>{
+      const s=new Set(prev);
+      if(s.has(nombre)) s.delete(nombre); else s.add(nombre);
+      return s;
+    });
+  };
+
+  const consumoMostrado = result?.consumo
+    ? (filtroActivo && productosFiltro.size>0
+        ? result.consumo.filter(p=>productosFiltro.has(p.nombre))
+        : result.consumo)
+    : [];
 
   return(
     <div className="page active">
@@ -494,13 +595,40 @@ function Consumo(){
         </div>
         {error&&<p className="login-error mt-1">{error}</p>}
       </div>
+
+      {result&&result.consumo?.length>0&&(
+        <div className="card">
+          <div className="card-title">
+            <span>Filtrar productos</span>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <label style={{fontSize:12,color:'var(--text2)',display:'flex',alignItems:'center',gap:4,cursor:'pointer'}}>
+                <input type="checkbox" checked={filtroActivo} onChange={e=>setFiltroActivo(e.target.checked)}/>
+                Activar filtro
+              </label>
+              {filtroActivo&&<button className="btn btn-sm" onClick={()=>setProductosFiltro(new Set(result.consumo.map(p=>p.nombre)))}>Seleccionar todos</button>}
+              {filtroActivo&&<button className="btn btn-sm" onClick={()=>setProductosFiltro(new Set())}>Limpiar</button>}
+            </div>
+          </div>
+          {filtroActivo&&(
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {result.consumo.map(p=>(
+                <label key={p.nombre} style={{display:'flex',alignItems:'center',gap:4,fontSize:12,cursor:'pointer',padding:'4px 8px',borderRadius:4,background:productosFiltro.has(p.nombre)?'var(--primary)':'var(--bg3)',color:productosFiltro.has(p.nombre)?'var(--primary-fg)':'var(--text2)',border:'1px solid var(--border)'}}>
+                  <input type="checkbox" style={{display:'none'}} checked={productosFiltro.has(p.nombre)} onChange={()=>toggleFiltroProducto(p.nombre)}/>
+                  {p.nombre}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {result&&!result.ventas?.length&&<div className="card"><div className="empty-state"><div className="icon">📊</div><p>No hay ventas en el período.</p></div></div>}
       {result&&result.ventas?.length>0&&(<>
         <div className="metric-grid">
           <div className="metric"><div className="metric-label">Período</div><div className="metric-value" style={{fontSize:14}}>{fmtDate(result.desde)}{result.desde!==result.hasta?` → ${fmtDate(result.hasta)}`:''}</div></div>
           <div className="metric"><div className="metric-label">Platos vendidos</div><div className="metric-value">{result.ventas.reduce((a,v)=>a+parseInt(v.cantidad),0)}</div></div>
           <div className="metric"><div className="metric-label">Tipos de plato</div><div className="metric-value">{result.porPlato.length}</div></div>
-          <div className="metric"><div className="metric-label">Ingredientes</div><div className="metric-value">{result.consumo.length}</div></div>
+          <div className="metric"><div className="metric-label">Ingredientes</div><div className="metric-value">{consumoMostrado.length}{filtroActivo&&productosFiltro.size>0?` / ${result.consumo.length}`:''}</div></div>
         </div>
         <div className="card">
           <div className="card-title">Ventas por plato</div>
@@ -508,11 +636,11 @@ function Consumo(){
             <tbody>{result.porPlato.map((p,i)=><tr key={i}><td>{p.nombre}</td><td><strong>{p.cantidad}</strong></td></tr>)}</tbody>
           </table></div>
         </div>
-        {result.consumo.length>0&&<div className="card">
-          <div className="card-title">Consumo teórico de materia prima</div>
+        {consumoMostrado.length>0&&<div className="card">
+          <div className="card-title">Consumo teórico de materia prima{filtroActivo&&productosFiltro.size>0?' (filtrado)':''}</div>
           <div className="table-wrap"><table>
             <thead><tr><th>Producto</th><th>Consumo neto</th><th>Merma</th><th>Consumo bruto</th></tr></thead>
-            <tbody>{result.consumo.map((p,i)=>(
+            <tbody>{consumoMostrado.map((p,i)=>(
               <tr key={i}>
                 <td><strong>{p.nombre}</strong></td>
                 <td>{parseFloat(p.cantidad).toFixed(3)} {p.unidad}</td>
@@ -581,9 +709,9 @@ export default function App(){
 
   useEffect(()=>{if(user) loadAll();},[user,loadAll]);
 
-  const logout=()=>{ localStorage.removeItem('rp_token'); localStorage.removeItem('rp_user'); setUser(null); };
+  const logout=()=>{localStorage.removeItem('rp_token');localStorage.removeItem('rp_user');setUser(null);};
 
-  if(!user) return <Login onLogin={u=>{ setUser(u); }}/>;
+  if(!user) return <Login onLogin={u=>{setUser(u);}}/>;
 
   const renderPage=()=>{
     if(page==='productos') return <Productos data={db.productos} onRefresh={loadAll}/>;
