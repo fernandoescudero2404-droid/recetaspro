@@ -925,6 +925,102 @@ function applyBranding(config){
   }
 }
 
+// ── SUCURSALES ───────────────────────────────────────────
+function Sucursales(){
+  const[sucursales,setSucursales]=useState([]);
+  const[editing,setEditing]=useState(null);
+  const[showNueva,setShowNueva]=useState(false);
+  const[form,setForm]=useState({nombre:'',username:'',password:''});
+  const[editForm,setEditForm]=useState({nombre:'',username:'',password:''});
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState('');
+  const[ok,setOk]=useState('');
+
+  const load=async()=>{
+    try{const s=await apiFetch('/sucursales');setSucursales(s);}catch(e){console.error(e);}
+  };
+  useEffect(()=>{load();},[]);
+
+  const crear=async()=>{
+    if(!form.nombre||!form.username||!form.password){setError('Completá todos los campos');return;}
+    setLoading(true);setError('');
+    try{
+      await apiFetch('/sucursales',{method:'POST',body:form});
+      setOk(`✓ Sucursal "${form.nombre}" creada`);
+      setForm({nombre:'',username:'',password:''});
+      setShowNueva(false);load();
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  };
+
+  const guardar=async()=>{
+    if(!editForm.nombre||!editForm.username){setError('Completá nombre y usuario');return;}
+    setLoading(true);setError('');
+    try{
+      await apiFetch(`/sucursales/${editing.id}`,{method:'PUT',body:editForm});
+      setEditing(null);setOk('✓ Sucursal actualizada');load();
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  };
+
+  const openEdit=(s)=>{
+    setEditing(s);
+    setEditForm({nombre:s.nombre,username:s.username,password:''});
+    setError('');
+  };
+
+  return(<div className="page active">
+    <div className="page-header"><h2>Sucursales</h2><p>Gestioná las sucursales del sistema</p></div>
+
+    {ok&&<div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:6,padding:'10px 14px',fontSize:13,color:'#166534',marginBottom:12}}>{ok}</div>}
+
+    {/* Crear nueva */}
+    <div className="card">
+      <div className="card-title">
+        <span>Nueva sucursal</span>
+        <button className="btn btn-sm" onClick={()=>{setShowNueva(!showNueva);setError('');}}>{showNueva?'✕ Cancelar':'+ Nueva sucursal'}</button>
+      </div>
+      {showNueva&&(<div>
+        <div className="form-grid mb-1">
+          <div className="form-field"><label>Nombre de la sucursal</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="ej: Sushi House Chacras"/></div>
+          <div className="form-field"><label>Usuario (para login)</label><input value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="ej: sushi_chacras"/></div>
+          <div className="form-field"><label>Contraseña inicial</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mínimo 6 caracteres"/></div>
+        </div>
+        {error&&<p className="login-error">{error}</p>}
+        <button className="btn btn-primary" onClick={crear} disabled={loading}>{loading?'Creando...':'Crear sucursal'}</button>
+      </div>)}
+    </div>
+
+    {/* Lista */}
+    <div className="card">
+      <div className="card-title">Sucursales ({sucursales.length})</div>
+      <div className="table-wrap"><table>
+        <thead><tr><th>Nombre</th><th>Usuario</th><th>Creada</th><th></th></tr></thead>
+        <tbody>
+          {!sucursales.length&&<tr><td colSpan={4}><div className="empty-state"><div className="icon">🏪</div><p>Sin sucursales.</p></div></td></tr>}
+          {sucursales.map(s=>(<tr key={s.id}>
+            <td><strong>{s.nombre}</strong></td>
+            <td><span className="badge badge-gray">{s.username}</span></td>
+            <td><span className="text-sm">{fmtDate(s.created_at?.split('T')[0])}</span></td>
+            <td><button className="btn btn-sm" onClick={()=>openEdit(s)}>✏️ Editar</button></td>
+          </tr>))}
+        </tbody>
+      </table></div>
+    </div>
+
+    {/* Modal editar */}
+    {editing&&(<Modal title={`Editar — ${editing.nombre}`} onClose={()=>setEditing(null)}>
+      <div className="form-grid mb-1">
+        <div className="form-field"><label>Nombre</label><input value={editForm.nombre} onChange={e=>setEditForm({...editForm,nombre:e.target.value})}/></div>
+        <div className="form-field"><label>Usuario</label><input value={editForm.username} onChange={e=>setEditForm({...editForm,username:e.target.value})}/></div>
+        <div className="form-field"><label>Nueva contraseña (dejar vacío para no cambiar)</label><input type="password" value={editForm.password} onChange={e=>setEditForm({...editForm,password:e.target.value})} placeholder="••••••••"/></div>
+      </div>
+      {error&&<p className="login-error">{error}</p>}
+      <button className="btn btn-primary btn-block mt-1" onClick={guardar} disabled={loading}>{loading?'Guardando...':'Guardar cambios'}</button>
+    </Modal>)}
+  </div>);
+}
+
 // ── USUARIOS (superadmin) ────────────────────────────────
 function Usuarios(){
   const[usuarios,setUsuarios]=useState([]);
@@ -1106,7 +1202,7 @@ const TODOS_NAV=[
   {section:'Recetas',items:[{id:'productos',label:'Productos brutos',icon:'📦'},{id:'intermedias',label:'Recetas intermedias',icon:'🧪'},{id:'finales',label:'Platos finales',icon:'🍽️'}]},
   {section:'Operaciones',items:[{id:'ventas',label:'Ventas',icon:'💰'},{id:'entregas',label:'Entregas',icon:'🚚'},{id:'stock',label:'Stock semanal',icon:'📊'},{id:'stocklink',label:'Link de stock',icon:'🔗'}]},
   {section:'Análisis',items:[{id:'consumo',label:'Consumo teórico',icon:'📈'}]},
-  {section:'Config',items:[{id:'branding',label:'Branding',icon:'🎨'},{id:'usuarios',label:'Usuarios',icon:'👥'}]},
+  {section:'Config',items:[{id:'branding',label:'Branding',icon:'🎨'},{id:'sucursales',label:'Sucursales',icon:'🏪'},{id:'usuarios',label:'Usuarios',icon:'👥'}]},
 ];
 
 export default function App(){
@@ -1167,6 +1263,7 @@ export default function App(){
     if(page==='stocklink') return <StockLink productos={db.productos}/>;
     if(page==='consumo') return <Consumo/>;
     if(page==='branding') return <Branding onSave={b=>{setBranding(b);applyBranding(b);localStorage.setItem('rp_branding',JSON.stringify(b));}}/>;
+    if(page==='sucursales') return <Sucursales/>;
     if(page==='usuarios') return <Usuarios/>;
   };
 
