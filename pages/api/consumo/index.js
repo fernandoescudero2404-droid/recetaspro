@@ -163,9 +163,9 @@ export default requireAuth(async function handler(req, res) {
       ? stkFin - stkFinTeo
       : null;
 
-    // % DESVÍO sobre consumo teórico
-    const desvio = (diferencia !== null && consTeo > 0)
-      ? (diferencia / consTeo) * 100
+    // % DIFERENCIA = (STK Final Teórico - STK Final Real) / STK Final Teórico × 100
+    const desvio = (diferencia !== null && stkFinTeo !== null && stkFinTeo !== 0)
+      ? ((stkFinTeo - (stkFin||0)) / stkFinTeo) * 100
       : null;
 
     return {

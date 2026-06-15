@@ -628,35 +628,376 @@ function Login({onLogin}){
 // ── APP ──────────────────────────────────────────────────
 const NAV=[
   {section:'Recetas',items:[{id:'productos',label:'Productos brutos',icon:'📦'},{id:'intermedias',label:'Recetas intermedias',icon:'🧪'},{id:'finales',label:'Platos finales',icon:'🍽️'}]},
-  {section:'Operaciones',items:[{id:'ventas',label:'Ventas',icon:'💰'},{id:'stock',label:'Stock semanal',icon:'📊'},{id:'stocklink',label:'Link de stock',icon:'🔗'}]},
+  {section:'Operaciones',items:[{id:'ventas',label:'Ventas',icon:'💰'},{id:'entregas',label:'Entregas',icon:'🚚'},{id:'stock',label:'Stock semanal',icon:'📊'},{id:'stocklink',label:'Link de stock',icon:'🔗'}]},
   {section:'Análisis',items:[{id:'consumo',label:'Consumo teórico',icon:'📈'}]},
+  {section:'Configuración',items:[{id:'branding',label:'Branding',icon:'🎨'}]},
 ];
 
 export default function App(){
   const[user,setUser]=useState(null);const[page,setPage]=useState('productos');
   const[db,setDb]=useState({productos:[],intermedias:[],finales:[]});
-  useEffect(()=>{const token=localStorage.getItem('rp_token');const u=localStorage.getItem('rp_user');if(token&&u)setUser(JSON.parse(u));},[]);
-  const loadAll=useCallback(async()=>{const[p,i,f]=await Promise.all([api.getProductos(),api.getIntermedias(),api.getFinales()]);setDb({productos:p,intermedias:i,finales:f});},[]);
+  const[branding,setBranding]=useState(null);
+
+  useEffect(()=>{
+    const token=localStorage.getItem('rp_token');
+    const u=localStorage.getItem('rp_user');
+    if(token&&u) setUser(JSON.parse(u));
+  },[]);
+
+  const loadAll=useCallback(async()=>{
+    const[p,i,f]=await Promise.all([api.getProductos(),api.getIntermedias(),api.getFinales()]);
+    setDb({productos:p,intermedias:i,finales:f});
+    // Load branding
+    try{
+      const b=await apiFetch('/branding');
+      if(b){setBranding(b);applyBranding(b);}
+    }catch(e){}
+  },[]);
+
   useEffect(()=>{if(user)loadAll();},[user,loadAll]);
   const logout=()=>{localStorage.removeItem('rp_token');localStorage.removeItem('rp_user');setUser(null);};
   if(!user) return <Login onLogin={u=>setUser(u)}/>;
+
   const renderPage=()=>{
     if(page==='productos') return <Productos data={db.productos} onRefresh={loadAll}/>;
     if(page==='intermedias') return <Intermedias data={db.intermedias} productos={db.productos} onRefresh={loadAll}/>;
     if(page==='finales') return <Finales data={db.finales} productos={db.productos} intermedias={db.intermedias} onRefresh={loadAll}/>;
     if(page==='ventas') return <Ventas finales={db.finales}/>;
+    if(page==='entregas') return <Entregas productos={db.productos}/>;
     if(page==='stock') return <Stock productos={db.productos}/>;
     if(page==='stocklink') return <StockLink productos={db.productos}/>;
     if(page==='consumo') return <Consumo/>;
+    if(page==='branding') return <Branding/>;
   };
+
+  const sidebarBg = branding?.primaryColor || 'var(--bg2)';
+  const sidebarColor = branding?.secondaryColor || 'var(--text2)';
+
   return(<div className="app">
-    <div className="sidebar">
-      <div className="sidebar-header"><div className="rest-name">{user.nombre}</div><div className="rest-sub">Panel de gestión</div></div>
-      {NAV.map(s=>(<div className="nav-section" key={s.section}><div className="nav-label">{s.section}</div>
-        {s.items.map(item=>(<div key={item.id} className={`nav-item${page===item.id?' active':''}`} onClick={()=>setPage(item.id)}><span>{item.icon}</span>{item.label}</div>))}
+    <div className="sidebar" style={{background:sidebarBg}}>
+      <div className="sidebar-header" style={{borderColor:'rgba(255,255,255,.15)'}}>
+        {branding?.logoBase64||branding?.logoUrl
+          ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:32,objectFit:'contain',marginBottom:4}}/>
+          : <div className="rest-name" style={{color:sidebarColor}}>{branding?.appName||user.nombre}</div>
+        }
+        <div className="rest-sub" style={{color:sidebarColor,opacity:.7}}>{user.nombre}</div>
+      </div>
+      {NAV.map(s=>(<div className="nav-section" key={s.section}>
+        <div className="nav-label" style={{color:sidebarColor,opacity:.5}}>{s.section}</div>
+        {s.items.map(item=>(<div key={item.id}
+          className={`nav-item${page===item.id?' active':''}`}
+          style={{color:page===item.id?sidebarColor:'',background:page===item.id?'rgba(255,255,255,.15)':'',opacity:page===item.id?1:.8}}
+          onClick={()=>setPage(item.id)}>
+          <span>{item.icon}</span>{item.label}
+        </div>))}
       </div>))}
-      <div className="sidebar-footer"><button className="logout-btn" onClick={logout}>🚪 Cerrar sesión</button></div>
+      <div className="sidebar-footer" style={{borderColor:'rgba(255,255,255,.15)'}}>
+        <button className="logout-btn" style={{color:sidebarColor,opacity:.7}} onClick={logout}>🚪 Cerrar sesión</button>
+      </div>
     </div>
     <div className="content">{renderPage()}</div>
   </div>);
+}
+
+// ── ENTREGAS ─────────────────────────────────────────────
+function Entregas({productos}){
+  const[entregas,setEntregas]=useState([]);
+  const[form,setForm]=useState({fecha:today(),producto_id:'',producto_nombre:'',unidad:'kg',cantidad:0,proveedor:'',notas:''});
+  const[filtroDesde,setFiltroDesde]=useState('');
+  const[filtroHasta,setFiltroHasta]=useState('');
+  const[search,setSearch]=useState('');
+  // PDF import state
+  const[pdfModal,setPdfModal]=useState(false);
+  const[pdfLoading,setPdfLoading]=useState(false);
+  const[pdfItems,setPdfItems]=useState(null);
+  const[pdfMeta,setPdfMeta]=useState({proveedor:'',fecha:today(),numero:''});
+
+  const load=useCallback(async()=>{
+    let url='/entregas';
+    if(filtroDesde&&filtroHasta) url+=`?desde=${filtroDesde}&hasta=${filtroHasta}`;
+    setEntregas(await apiFetch(url));
+  },[filtroDesde,filtroHasta]);
+
+  useEffect(()=>{load();},[load]);
+
+  const save=async()=>{
+    if(!form.fecha||!form.producto_nombre){alert('Completá fecha y producto');return;}
+    await apiFetch('/entregas',{method:'POST',body:{...form,cantidad:parseFloat(form.cantidad)||0,producto_id:form.producto_id?parseInt(form.producto_id):null}});
+    setForm({fecha:today(),producto_id:'',producto_nombre:'',unidad:'kg',cantidad:0,proveedor:'',notas:''});
+    load();
+  };
+
+  const del=async id=>{if(!confirm('¿Eliminar?'))return;await apiFetch(`/entregas/${id}`,{method:'DELETE'});load();};
+
+  const handleProdSelect=e=>{
+    const prod=productos.find(p=>p.id===parseInt(e.target.value));
+    if(prod) setForm({...form,producto_id:prod.id,producto_nombre:prod.nombre,unidad:prod.unidad});
+    else setForm({...form,producto_id:'',producto_nombre:'',unidad:'kg'});
+  };
+
+  const handlePDF=async e=>{
+    const file=e.target.files[0];
+    if(!file) return;
+    setPdfLoading(true);
+    const reader=new FileReader();
+    reader.onload=async ev=>{
+      const base64=ev.target.result.split(',')[1];
+      try{
+        const data=await apiFetch('/pdf-remito',{method:'POST',body:{pdfBase64:base64}});
+        setPdfMeta({proveedor:data.proveedor||'',fecha:data.fecha||today(),numero:data.numero||''});
+        setPdfItems((data.items||[]).map((item,i)=>({
+          ...item,
+          id:i,
+          producto_id: productos.find(p=>p.nombre.toLowerCase().includes(item.descripcion.toLowerCase().substring(0,8)))?.id||null,
+          activo:true
+        })));
+        setPdfModal(true);
+      }catch(err){alert('Error al leer el PDF: '+err.message);}
+      setPdfLoading(false);
+    };
+    reader.readAsDataURL(file);
+    e.target.value='';
+  };
+
+  const confirmarPDF=async()=>{
+    const activos=pdfItems.filter(i=>i.activo&&parseFloat(i.cantidad)>0);
+    for(const item of activos){
+      const prod=item.producto_id?productos.find(p=>p.id===item.producto_id):null;
+      await apiFetch('/entregas',{method:'POST',body:{
+        fecha:pdfMeta.fecha,
+        producto_id:prod?.id||null,
+        producto_nombre:prod?.nombre||item.descripcion,
+        unidad:item.unidad||prod?.unidad||'kg',
+        cantidad:parseFloat(item.cantidad)||0,
+        proveedor:pdfMeta.proveedor,
+        notas:pdfMeta.numero?`Remito ${pdfMeta.numero}`:null,
+      }});
+    }
+    setPdfModal(false);setPdfItems(null);
+    load();
+    alert(`✓ ${activos.length} ítems importados`);
+  };
+
+  const filtered=entregas.filter(e=>!search||e.producto_nombre.toLowerCase().includes(search.toLowerCase()));
+
+  return(<div className="page active">
+    <div className="page-header"><h2>Entregas</h2><p>Ingreso de mercadería desde proveedores</p></div>
+
+    {/* Importar PDF */}
+    <div className="card">
+      <div className="card-title">Importar remito PDF</div>
+      <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+        <label className="btn" style={{cursor:'pointer'}}>
+          {pdfLoading?'Leyendo PDF...':'📄 Subir PDF de remito'}
+          <input type="file" accept=".pdf" style={{display:'none'}} onChange={handlePDF} disabled={pdfLoading}/>
+        </label>
+        <span className="text-sm" style={{color:'var(--text2)'}}>El sistema lee el PDF y te muestra los ítems para que los revises antes de confirmar</span>
+      </div>
+    </div>
+
+    {/* Carga manual */}
+    <div className="card">
+      <div className="card-title">Carga manual</div>
+      <div className="form-row" style={{flexWrap:'wrap'}}>
+        <div className="form-field" style={{minWidth:120}}><label>Fecha</label><input type="date" value={form.fecha} onChange={e=>setForm({...form,fecha:e.target.value})}/></div>
+        <div className="form-field" style={{flex:2,minWidth:180}}><label>Producto</label>
+          <select value={form.producto_id} onChange={handleProdSelect}>
+            <option value="">— Seleccioná o escribí abajo —</option>
+            {[...productos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+        <div className="form-field" style={{flex:2,minWidth:160}}><label>Nombre (si no está en lista)</label>
+          <input value={form.producto_nombre} onChange={e=>setForm({...form,producto_nombre:e.target.value})} placeholder="ej: Aceite de soja x 5L"/>
+        </div>
+        <div className="form-field" style={{minWidth:70}}><label>Unidad</label>
+          <select value={form.unidad} onChange={e=>setForm({...form,unidad:e.target.value})}>
+            {['kg','g','und','unidad','litro','lts','grs','porcion'].map(u=><option key={u}>{u}</option>)}
+          </select>
+        </div>
+        <div className="form-field" style={{minWidth:90}}><label>Cantidad</label><input type="number" min="0" step="0.01" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})}/></div>
+        <div className="form-field" style={{minWidth:130}}><label>Proveedor</label><input value={form.proveedor} onChange={e=>setForm({...form,proveedor:e.target.value})} placeholder="ej: Roll Factory"/></div>
+        <div className="form-field" style={{minWidth:120}}><label>Notas</label><input value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="ej: Remito 123"/></div>
+        <button className="btn" onClick={save}>✓ Guardar</button>
+      </div>
+    </div>
+
+    {/* Historial */}
+    <div className="card">
+      <div className="card-title">
+        <span>Historial ({filtered.length})</span>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+          <input placeholder="Buscar..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:150}}/>
+          <input type="date" value={filtroDesde} onChange={e=>setFiltroDesde(e.target.value)} title="Desde"/>
+          <input type="date" value={filtroHasta} onChange={e=>setFiltroHasta(e.target.value)} title="Hasta"/>
+          {(filtroDesde||filtroHasta||search)&&<button className="btn btn-sm" onClick={()=>{setFiltroDesde('');setFiltroHasta('');setSearch('');}}>✕</button>}
+        </div>
+      </div>
+      <div className="table-wrap"><table>
+        <thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Proveedor / Notas</th><th></th></tr></thead>
+        <tbody>
+          {!filtered.length&&<tr><td colSpan={5}><div className="empty-state"><div className="icon">📦</div><p>Sin entregas cargadas.</p></div></td></tr>}
+          {filtered.map(e=>(<tr key={e.id}>
+            <td>{fmtDate(e.fecha)}</td>
+            <td><strong>{e.producto_nombre}</strong></td>
+            <td><strong>{fmtNum(e.cantidad,3)}</strong> {e.unidad}</td>
+            <td><span className="text-sm" style={{color:'var(--text3)'}}>{e.notas||'—'}</span></td>
+            <td><button className="btn btn-sm btn-danger" onClick={()=>del(e.id)}>🗑</button></td>
+          </tr>))}
+        </tbody>
+      </table></div>
+    </div>
+
+    {/* Modal revisión PDF */}
+    {pdfModal&&pdfItems&&(
+      <Modal title="Revisar remito importado" onClose={()=>{setPdfModal(false);setPdfItems(null);}} wide>
+        <div className="form-grid mb-1" style={{marginBottom:12}}>
+          <div className="form-field"><label>Proveedor</label><input value={pdfMeta.proveedor} onChange={e=>setPdfMeta({...pdfMeta,proveedor:e.target.value})}/></div>
+          <div className="form-field"><label>Fecha</label><input type="date" value={pdfMeta.fecha} onChange={e=>setPdfMeta({...pdfMeta,fecha:e.target.value})}/></div>
+          <div className="form-field"><label>Nro. Remito</label><input value={pdfMeta.numero} onChange={e=>setPdfMeta({...pdfMeta,numero:e.target.value})}/></div>
+        </div>
+        <div className="table-wrap" style={{marginBottom:12}}><table>
+          <thead><tr><th>✓</th><th>Descripción PDF</th><th>Producto del sistema</th><th>Cantidad</th><th>Unidad</th></tr></thead>
+          <tbody>{pdfItems.map((item,i)=>(
+            <tr key={i} style={{opacity:item.activo?1:.45}}>
+              <td><input type="checkbox" checked={item.activo} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],activo:e.target.checked};return a;})}/></td>
+              <td><span className="text-sm">{item.descripcion}</span>{item.sku&&<span className="badge badge-gray" style={{marginLeft:4,fontSize:10}}>{item.sku}</span>}</td>
+              <td>
+                <select value={item.producto_id||''} style={{fontSize:12}} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],producto_id:e.target.value?parseInt(e.target.value):null};return a;})}>
+                  <option value="">— Sin vincular —</option>
+                  {[...productos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+                </select>
+              </td>
+              <td><input type="number" min="0" step="0.01" value={item.cantidad} style={{width:80}} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],cantidad:e.target.value};return a;})}/></td>
+              <td><select value={item.unidad||'kg'} style={{fontSize:12,width:60}} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],unidad:e.target.value};return a;})}>
+                {['kg','g','und','unidad','lts','litro','grs'].map(u=><option key={u}>{u}</option>)}
+              </select></td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+          <button className="btn" onClick={()=>{setPdfModal(false);setPdfItems(null);}}>Cancelar</button>
+          <button className="btn btn-primary" onClick={confirmarPDF}>✓ Confirmar y guardar {pdfItems.filter(i=>i.activo).length} ítems</button>
+        </div>
+      </Modal>
+    )}
+  </div>);
+}
+
+// ── BRANDING ─────────────────────────────────────────────
+function Branding(){
+  const[config,setConfig]=useState({
+    primaryColor:'#DC2626',
+    secondaryColor:'#ffffff',
+    accentColor:'#991B1B',
+    appName:'RecetasPro',
+    logoUrl:'',
+    logoBase64:'',
+  });
+  const[saving,setSaving]=useState(false);
+  const[loaded,setLoaded]=useState(false);
+
+  useEffect(()=>{
+    apiFetch('/branding').then(data=>{
+      if(data) setConfig(c=>({...c,...data}));
+      setLoaded(true);
+    }).catch(()=>setLoaded(true));
+  },[]);
+
+  const save=async()=>{
+    setSaving(true);
+    await apiFetch('/branding',{method:'PUT',body:config});
+    setSaving(false);
+    // Aplicar cambios al CSS
+    applyBranding(config);
+    alert('✓ Branding guardado. Recargá la página para ver todos los cambios.');
+  };
+
+  const handleLogo=e=>{
+    const file=e.target.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=ev=>setConfig(c=>({...c,logoBase64:ev.target.result,logoUrl:''}));
+    reader.readAsDataURL(file);
+  };
+
+  if(!loaded) return <div className="page active"><div className="page-header"><h2>Branding</h2></div><div className="card"><p className="text-sm">Cargando...</p></div></div>;
+
+  return(<div className="page active">
+    <div className="page-header"><h2>Branding</h2><p>Personalizá la apariencia de la plataforma</p></div>
+
+    <div className="card">
+      <div className="card-title">Nombre e identidad</div>
+      <div className="form-grid mb-1">
+        <div className="form-field"><label>Nombre de la app</label><input value={config.appName} onChange={e=>setConfig({...config,appName:e.target.value})} placeholder="ej: Ai Sushi Control"/></div>
+      </div>
+      <div className="form-field mb-1">
+        <label>Logo (PNG, JPG, SVG)</label>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <label className="btn" style={{cursor:'pointer'}}>
+            📷 Subir logo
+            <input type="file" accept="image/*" style={{display:'none'}} onChange={handleLogo}/>
+          </label>
+          {(config.logoBase64||config.logoUrl)&&(
+            <img src={config.logoBase64||config.logoUrl} alt="Logo" style={{height:48,objectFit:'contain',border:'1px solid var(--border)',borderRadius:4,padding:4,background:'white'}}/>
+          )}
+          {(config.logoBase64||config.logoUrl)&&<button className="btn btn-sm btn-danger" onClick={()=>setConfig({...config,logoBase64:'',logoUrl:''})}>✕ Quitar logo</button>}
+        </div>
+      </div>
+    </div>
+
+    <div className="card">
+      <div className="card-title">Colores</div>
+      <div className="form-grid mb-1">
+        <div className="form-field">
+          <label>Color principal</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="color" value={config.primaryColor} onChange={e=>setConfig({...config,primaryColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
+            <input value={config.primaryColor} onChange={e=>setConfig({...config,primaryColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
+          </div>
+          <span className="text-sm">Sidebar, botones primarios, nav activo</span>
+        </div>
+        <div className="form-field">
+          <label>Color de acento</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="color" value={config.accentColor} onChange={e=>setConfig({...config,accentColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
+            <input value={config.accentColor} onChange={e=>setConfig({...config,accentColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
+          </div>
+          <span className="text-sm">Hover, badges, detalles</span>
+        </div>
+        <div className="form-field">
+          <label>Color de texto del sidebar</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="color" value={config.secondaryColor} onChange={e=>setConfig({...config,secondaryColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
+            <input value={config.secondaryColor} onChange={e=>setConfig({...config,secondaryColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
+          </div>
+          <span className="text-sm">Texto e íconos del menú lateral</span>
+        </div>
+      </div>
+
+      {/* Preview */}
+      <div style={{marginTop:12,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',maxWidth:360}}>
+        <div style={{background:config.primaryColor,padding:'12px 16px',display:'flex',alignItems:'center',gap:10}}>
+          {(config.logoBase64||config.logoUrl)?<img src={config.logoBase64||config.logoUrl} alt="logo" style={{height:28,objectFit:'contain'}}/>:
+            <span style={{fontWeight:700,fontSize:16,color:config.secondaryColor}}>{config.appName}</span>}
+        </div>
+        <div style={{background:config.primaryColor,padding:'4px 0',opacity:.9}}>
+          {['Productos brutos','Recetas intermedias','Ventas','Consumo teórico'].map(item=>(
+            <div key={item} style={{padding:'7px 16px',fontSize:13,color:config.secondaryColor,opacity:.85}}>{item}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <button className="btn btn-primary" onClick={save} disabled={saving}>{saving?'Guardando...':'Guardar branding'}</button>
+  </div>);
+}
+
+function applyBranding(config){
+  if(!config) return;
+  const root=document.documentElement;
+  if(config.primaryColor){
+    root.style.setProperty('--brand-primary',config.primaryColor);
+    // Update sidebar background
+    document.querySelectorAll('.sidebar').forEach(el=>el.style.background=config.primaryColor);
+  }
 }
