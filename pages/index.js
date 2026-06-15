@@ -1299,12 +1299,15 @@ export default function App(){
         </div>
         {showSucursales&&(
           <div style={{position:'absolute',top:72,left:0,right:0,background:'white',border:'1px solid var(--border)',borderRadius:6,boxShadow:'0 4px 12px rgba(0,0,0,.15)',zIndex:200,overflow:'hidden'}}>
-            {user.sucursales.map(s=>(
-              <div key={s.id} style={{padding:'10px 14px',fontSize:13,cursor:'pointer',borderBottom:'1px solid var(--border)',color:'var(--text)',fontWeight:s.id===user.sucursal?.id?600:400,background:s.id===user.sucursal?.id?'var(--bg3)':'white'}}
-                onClick={e=>{e.stopPropagation();cambiarSucursal(s);}}>
-                🏪 {s.nombre}
-              </div>
-            ))}
+            {(user.sucursales||[]).length===0
+              ? <div style={{padding:'10px 14px',fontSize:12,color:'var(--text3)'}}>Solo una sucursal activa</div>
+              : (user.sucursales||[]).map(s=>(
+                <div key={s.id} style={{padding:'10px 14px',fontSize:13,cursor:'pointer',borderBottom:'1px solid var(--border)',color:'var(--text)',fontWeight:s.id===user.sucursal?.id?600:400,background:s.id===user.sucursal?.id?'var(--bg3)':'white'}}
+                  onClick={e=>{e.stopPropagation();cambiarSucursal(s);}}>
+                  🏪 {s.nombre}
+                </div>
+              ))
+            }
           </div>
         )}
       </div>
