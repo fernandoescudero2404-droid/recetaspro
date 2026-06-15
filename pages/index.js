@@ -719,7 +719,7 @@ function Login({onLogin}){
       if(data.error) throw new Error(data.error);
       if(data.sucursales.length===1){
         // Una sola sucursal: entrar directo
-        finalizarLogin(data.token, data.usuario, data.sucursales[0]);
+        finalizarLogin(data.token, data.usuario, data.sucursales[0], data.sucursales);
       } else {
         // Múltiples sucursales: mostrar selector
         setTokenTemp(data.token);
@@ -741,12 +741,12 @@ function Login({onLogin}){
     setLoading(false);
   };
 
-  const finalizarLogin=(token,usuario,sucursal)=>{
+  const finalizarLogin=(token,usuario,sucursal,todasSucursales)=>{
     localStorage.setItem('rp_token',token);
-    localStorage.setItem('rp_user',JSON.stringify({...usuario,sucursal}));
+    localStorage.setItem('rp_user',JSON.stringify({...usuario,sucursal,sucursales:todasSucursales||[sucursal]}));
     localStorage.setItem('rp_sucursal_id',sucursal.id);
     localStorage.setItem('rp_modulos',JSON.stringify(sucursal.modulos||'all'));
-    onLogin({...usuario,sucursal,modulos:sucursal.modulos||'all'});
+    onLogin({...usuario,sucursal,sucursales:todasSucursales||[sucursal],modulos:sucursal.modulos||'all'});
   };
 
   const primaryColor=branding?.primaryColor||'#1c1917';
@@ -766,7 +766,7 @@ function Login({onLogin}){
       <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
         {sucursales.map(s=>(
           <button key={s.id} className="btn" style={{justifyContent:'flex-start',padding:'12px 16px',fontSize:14}}
-            onClick={()=>finalizarLogin(tokenTemp,usuarioTemp,s)}>
+            onClick={()=>finalizarLogin(tokenTemp,usuarioTemp,s,sucursales)}>
             🏪 {s.nombre}
           </button>
         ))}
@@ -943,7 +943,11 @@ function Usuarios(){
     try{
       const[u,r]=await Promise.all([apiFetch('/usuarios'),apiFetch('/restaurantes-lista')]);
       setUsuarios(u);setRestaurantes(r);
-    }catch(e){console.error(e);}
+    }catch(e){
+      console.error('Error cargando usuarios/sucursales:',e);
+      // Try loading just usuarios
+      try{const u=await apiFetch('/usuarios');setUsuarios(u);}catch(e2){}
+    }
   };
   useEffect(()=>{load();},[]);
 
@@ -1110,6 +1114,7 @@ export default function App(){
   const[page,setPage]=useState('productos');
   const[db,setDb]=useState({productos:[],intermedias:[],finales:[]});
   const[branding,setBranding]=useState(null);
+  const[showSucursales,setShowSucursales]=useState(false);
 
   useEffect(()=>{
     const token=localStorage.getItem('rp_token');
@@ -1126,6 +1131,15 @@ export default function App(){
   },[]);
 
   useEffect(()=>{if(user)loadAll();},[user,loadAll]);
+
+  const cambiarSucursal=(sucursal)=>{
+    setShowSucursales(false);
+    localStorage.setItem('rp_sucursal_id', sucursal.id);
+    localStorage.setItem('rp_modulos', JSON.stringify(sucursal.modulos||'all'));
+    setUser(u=>({...u, sucursal, modulos:sucursal.modulos||'all'}));
+    setPage('productos');
+    loadAll();
+  };
 
   const logout=()=>{
     ['rp_token','rp_user','rp_branding','rp_sucursal_id','rp_modulos'].forEach(k=>localStorage.removeItem(k));
@@ -1161,13 +1175,27 @@ export default function App(){
   const sucursalNombre=user.sucursal?.nombre||user.nombre;
 
   return(<div className="app">
-    <div className="sidebar" style={{background:sidebarBg}}>
-      <div className="sidebar-header" style={{borderColor:'rgba(255,255,255,.15)'}}>
+    <div className="sidebar" style={{background:sidebarBg,position:'relative'}}>
+      <div className="sidebar-header" style={{borderColor:'rgba(255,255,255,.15)',cursor:user.sucursales?.length>1?'pointer':'default'}}
+        onClick={()=>{ if(user.sucursales?.length>1) setShowSucursales(s=>!s); }}>
         {branding?.logoBase64||branding?.logoUrl
           ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:36,objectFit:'contain',marginBottom:4}}/>
           : <div className="rest-name" style={{color:sidebarTxt}}>{branding?.appName||'RecetasPro'}</div>
         }
-        <div className="rest-sub" style={{color:sidebarTxt,opacity:.7}}>{sucursalNombre}</div>
+        <div style={{display:'flex',alignItems:'center',gap:4}}>
+          <div className="rest-sub" style={{color:sidebarTxt,opacity:.7}}>{sucursalNombre}</div>
+          {user.sucursales?.length>1&&<span style={{color:sidebarTxt,opacity:.5,fontSize:10}}>▾</span>}
+        </div>
+        {showSucursales&&user.sucursales?.length>1&&(
+          <div style={{position:'absolute',top:72,left:0,right:0,background:'white',border:'1px solid var(--border)',borderRadius:6,boxShadow:'0 4px 12px rgba(0,0,0,.15)',zIndex:200,overflow:'hidden'}}>
+            {user.sucursales.map(s=>(
+              <div key={s.id} style={{padding:'10px 14px',fontSize:13,cursor:'pointer',borderBottom:'1px solid var(--border)',color:'var(--text)',fontWeight:s.id===user.sucursal?.id?600:400,background:s.id===user.sucursal?.id?'var(--bg3)':'white'}}
+                onClick={e=>{e.stopPropagation();cambiarSucursal(s);}}>
+                🏪 {s.nombre}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {NAV.map(s=>(<div className="nav-section" key={s.section}>
         <div className="nav-label" style={{color:sidebarTxt,opacity:.5}}>{s.section}</div>
