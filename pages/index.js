@@ -305,11 +305,26 @@ function Stock({productos}){
 
   // Solo calcular bruto si el registro NO vino ya convertido desde el link
   // Los convertidos tienen nota que empieza con "Desde "
-  const calcBruto = (s) => {
-    if(s.notas && (s.notas.startsWith('Desde ') || s.notas.startsWith('Calculado desde'))) return null; // ya fue convertido
+  // Stock que ya viene expandido desde una receta intermedia (la API ya aplicó la merma)
+  const esCalculado = (s) => s.notas && s.notas.startsWith('Calculado desde');
+
+  // Equiv. bruto = lo que tenés que tener en stock
+  // Cantidad neta = equiv. bruto × (100 - merma) / 100
+  const getEquivBruto = (s) => {
+    if(s.notas && (s.notas.startsWith('Calculado desde') || s.notas.startsWith('Conversion:'))) {
+      return parseFloat(s.cantidad); // ya está en bruto
+    }
     const merma = getProdMerma(s.producto_nombre);
-    if(merma<=0) return null;
-    return parseFloat(s.cantidad) / ((100-merma)/100);
+    if(merma <= 0) return null;
+    return parseFloat(s.cantidad) / ((100 - merma) / 100);
+  };
+
+  const getCantiNeta = (s) => {
+    if(s.notas && (s.notas.startsWith('Calculado desde') || s.notas.startsWith('Conversion:'))) {
+      const merma = getProdMerma(s.producto_nombre);
+      return parseFloat(s.cantidad) * ((100 - merma) / 100);
+    }
+    return parseFloat(s.cantidad);
   };
 
   return(<div className="page active">
@@ -341,11 +356,12 @@ function Stock({productos}){
         </div>
       </div>
       <div className="table-wrap"><table>
-        <thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad neta</th><th>Merma</th><th>Equiv. bruto</th><th>Notas</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Producto</th><th>Cant. neta</th><th>Merma</th><th>Equiv. bruto</th><th>Notas</th><th></th></tr></thead>
         <tbody>
           {!filtered.length&&<tr><td colSpan={7}><div className="empty-state"><div className="icon">📦</div><p>Sin registros.</p></div></td></tr>}
           {filtered.map(s=>{
-            const bruto = calcBruto(s);
+            const bruto = getEquivBruto(s);
+            const neta = getCantiNeta(s);
             const merma = getProdMerma(s.producto_nombre);
             return(
               <tr key={s.id}>
@@ -354,10 +370,12 @@ function Stock({productos}){
                 <td>
                   {editing?.id===s.id
                     ? <input type="number" min="0" step="0.01" value={editing.cantidad} style={{width:80}} onChange={e=>setEditing({...editing,cantidad:e.target.value})}/>
-                    : <strong>{fmtNum(s.cantidad,3)}</strong>} {s.unidad}
+                    : <><strong>{fmtNum(neta,3)}</strong> {s.unidad}</>}
                 </td>
                 <td>{merma>0?<span className={`badge ${merma>30?'badge-amber':merma>15?'badge-blue':'badge-green'}`}>{merma}%</span>:'—'}</td>
-                <td>{bruto?<span style={{color:'var(--text2)',fontSize:13}}>{fmtNum(bruto,3)} {s.unidad}</span>:'—'}</td>
+                <td>
+                  {bruto?<strong>{fmtNum(bruto,3)} {s.unidad}</strong>:'—'}
+                </td>
                 <td>
                   {editing?.id===s.id
                     ? <input value={editing.notas||''} style={{width:120}} onChange={e=>setEditing({...editing,notas:e.target.value})} placeholder="notas..."/>
