@@ -41,36 +41,66 @@ async function expandir(ingredientes, productos, intermedias, finales, visited =
   return resultado;
 }
 
+// Dado un lunes de referencia, busca el stock más cercano en rango ±1 día (dom, lun, mar)
+// Retorna el stock de ese rango más cercano al lunes
+async function getStockCercano(rid, lunesFecha, productos) {
+  const lunes = new Date(lunesFecha);
+  const domingo = new Date(lunes); domingo.setDate(lunes.getDate() - 1);
+  const martes  = new Date(lunes); martes.setDate(lunes.getDate() + 1);
+
+  const domStr = domingo.toISOString().split('T')[0];
+  const lunStr = lunesFecha;
+  const marStr = martes.toISOString().split('T')[0];
+
+  // Buscar stocks en el rango dom-mar, tomar el más cercano al lunes (prioridad: lun > dom > mar)
+  const rows = await sql`
+    SELECT DISTINCT ON (producto_id) *
+    FROM stocks
+    WHERE restaurante_id = ${rid}
+      AND fecha IN (${domStr}, ${lunStr}, ${marStr})
+      AND (notas IS NULL OR notas NOT LIKE 'Stock receta intermedia%')
+    ORDER BY producto_id,
+      CASE fecha
+        WHEN ${lunStr} THEN 1
+        WHEN ${domStr} THEN 2
+        WHEN ${marStr} THEN 3
+      END`;
+
+  // Indexar por producto_id
+  const map = {};
+  for (const r of rows) {
+    map[r.producto_id] = parseFloat(r.cantidad);
+  }
+  return map;
+}
+
 export default requireAuth(async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end();
   const rid = req.restaurante.id;
   const { desde, hasta } = req.query;
   if (!desde || !hasta) return res.status(400).json({ error: 'Faltan fechas' });
 
-  const [ventas, productos, intermediasRaw, finalesRaw, stocks, entregas] = await Promise.all([
-    sql`SELECT * FROM ventas    WHERE restaurante_id=${rid} AND fecha BETWEEN ${desde} AND ${hasta}`,
+  // Calcular el lunes siguiente al período
+  const lunesSiguiente = new Date(hasta);
+  lunesSiguiente.setDate(lunesSiguiente.getDate() + 1);
+  const lunesSigStr = lunesSiguiente.toISOString().split('T')[0];
+
+  const [ventas, productos, intermediasRaw, finalesRaw, entregas] = await Promise.all([
+    sql`SELECT * FROM ventas WHERE restaurante_id=${rid} AND fecha BETWEEN ${desde} AND ${hasta}`,
     sql`SELECT * FROM productos WHERE restaurante_id=${rid}`,
     sql`SELECT * FROM recetas_intermedias WHERE restaurante_id=${rid}`,
-    sql`SELECT * FROM recetas_finales     WHERE restaurante_id=${rid}`,
-    sql`SELECT * FROM stocks   WHERE restaurante_id=${rid} AND fecha BETWEEN ${desde} AND ${hasta}`,
+    sql`SELECT * FROM recetas_finales WHERE restaurante_id=${rid}`,
     sql`SELECT * FROM entregas WHERE restaurante_id=${rid} AND fecha BETWEEN ${desde} AND ${hasta}`,
   ]);
 
-  // También buscamos stocks de la semana ANTERIOR (STK INI = último stock antes del período)
-  const stocksAntes = await sql`
-    SELECT DISTINCT ON (producto_id) *
-    FROM stocks
-    WHERE restaurante_id=${rid} AND fecha < ${desde}
-    ORDER BY producto_id, fecha DESC`;
+  // Stock inicial: ±1 día del lunes de inicio
+  const stkIniMap = await getStockCercano(rid, desde, productos);
+  // Stock final real: ±1 día del lunes siguiente
+  const stkFinMap = await getStockCercano(rid, lunesSigStr, productos);
 
-  // STK FINAL = último stock dentro del período
-  const stocksFinal = await sql`
-    SELECT DISTINCT ON (producto_id) *
-    FROM stocks
-    WHERE restaurante_id=${rid} AND fecha BETWEEN ${desde} AND ${hasta}
-    ORDER BY producto_id, fecha DESC`;
-
-  if (!ventas.length) return res.json({ ventas: [], consumo: [], porPlato: [], tablaComparativa: [] });
+  if (!ventas.length && !Object.keys(stkIniMap).length) {
+    return res.json({ ventas: [], consumo: [], porPlato: [], tablaComparativa: [] });
+  }
 
   const idsInt = intermediasRaw.map(r => r.id);
   const idsFin = finalesRaw.map(r => r.id);
@@ -89,7 +119,7 @@ export default requireAuth(async function handler(req, res) {
     porPlato[v.receta_final_id].cantidad += parseInt(v.cantidad);
   }
 
-  // Calcular consumo teórico total por producto
+  // Calcular consumo teórico total
   const consumoTotal = {};
   for (const [pid, info] of Object.entries(porPlato)) {
     const plato = finales.find(f => f.id === parseInt(pid));
@@ -102,39 +132,62 @@ export default requireAuth(async function handler(req, res) {
     }
   }
 
-  // Armar tabla comparativa por producto
-  const tablaComparativa = Object.values(consumoTotal).map(c => {
-    const stkIniRow  = stocksAntes.find(s => s.producto_id === c.id);
-    const stkFinRow  = stocksFinal.find(s => s.producto_id === c.id);
-    const entregasP  = entregas.filter(e => e.producto_id === c.id);
+  // Armar tabla comparativa
+  // Incluir todos los productos que tienen algún dato (consumo, stock ini, o stock fin)
+  const todosProductos = new Set([
+    ...Object.keys(consumoTotal).map(k => k.replace('p_', '')),
+    ...Object.keys(stkIniMap),
+    ...Object.keys(stkFinMap),
+  ]);
 
-    const stkIni   = parseFloat(stkIniRow?.cantidad)  || 0;
-    const stkFinal = parseFloat(stkFinRow?.cantidad)  || 0;
-    const entrega  = entregasP.reduce((a, e) => a + parseFloat(e.cantidad), 0);
-    const consTeo  = c.bruto; // consumo teórico bruto (ya incluye merma)
-    // Consumo real = lo que realmente desapareció del stock
-    const consReal = stkIni + entrega - stkFinal;
-    const desvio   = consTeo > 0 ? ((consReal - consTeo) / consTeo) * 100 : 0;
+  const tablaComparativa = [...todosProductos].map(prodIdStr => {
+    const prodId = parseInt(prodIdStr);
+    const prod = productos.find(p => p.id === prodId);
+    if (!prod) return null;
+
+    const key = `p_${prodId}`;
+    const consTeo  = consumoTotal[key]?.bruto || 0;
+    const stkIni   = stkIniMap[prodId] ?? null;  // null = no hay dato
+    const stkFin   = stkFinMap[prodId] ?? null;  // null = no hay dato
+
+    // Entregas de este producto en el período
+    const entregaP = entregas
+      .filter(e => e.producto_id === prodId)
+      .reduce((a, e) => a + parseFloat(e.cantidad), 0);
+
+    // STK FINAL TEÓRICO = STK INICIAL + ENTREGA - CONS. TEÓRICO
+    const stkFinTeo = stkIni !== null ? stkIni + entregaP - consTeo : null;
+
+    // DIFERENCIA = STK FINAL REAL - STK FINAL TEÓRICO
+    const diferencia = (stkFin !== null && stkFinTeo !== null)
+      ? stkFin - stkFinTeo
+      : null;
+
+    // % DESVÍO sobre consumo teórico
+    const desvio = (diferencia !== null && consTeo > 0)
+      ? (diferencia / consTeo) * 100
+      : null;
 
     return {
-      id:       c.id,
-      nombre:   c.nombre,
-      unidad:   c.unidad,
-      merma:    c.merma,
+      id:        prodId,
+      nombre:    prod.nombre,
+      unidad:    prod.unidad,
+      consTeo:   Math.round(consTeo * 1000) / 1000,
       stkIni,
-      entrega,
-      consTeo:  Math.round(consTeo * 1000) / 1000,
-      stkFinal,
-      consReal: Math.round(consReal * 1000) / 1000,
-      desvio:   Math.round(desvio * 10) / 10,
-      tieneDatos: stkIniRow !== undefined || stkFinRow !== undefined || entregasP.length > 0,
+      entrega:   entregaP,
+      stkFinTeo: stkFinTeo !== null ? Math.round(stkFinTeo * 1000) / 1000 : null,
+      stkFin,
+      diferencia: diferencia !== null ? Math.round(diferencia * 1000) / 1000 : null,
+      desvio:     desvio !== null ? Math.round(desvio * 10) / 10 : null,
+      tieneDatos: stkIni !== null || stkFin !== null || entregaP > 0,
     };
-  }).sort((a, b) => b.consTeo - a.consTeo);
+  }).filter(Boolean).sort((a, b) => b.consTeo - a.consTeo);
 
   res.json({
     ventas,
     porPlato: Object.values(porPlato).sort((a, b) => b.cantidad - a.cantidad),
     consumo:  Object.values(consumoTotal).sort((a, b) => b.bruto - a.bruto).map(v => ({ ...v, cantidad: v.neto })),
     tablaComparativa,
+    lunesSiguiente: lunesSigStr,
   });
 });

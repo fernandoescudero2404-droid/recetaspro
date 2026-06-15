@@ -545,8 +545,6 @@ function Consumo(){
             </label>))}
           </div>)}
         </div>
-
-        {/* Tabla principal */}
         <div className="card">
           <div className="card-title">
             Semana del {fmtDate(result.desde)} al {fmtDate(result.hasta)}
@@ -555,32 +553,48 @@ function Consumo(){
           <div className="table-wrap"><table>
             <thead><tr>
               <th>Producto</th><th>UM</th>
-              <th style={{background:'#EFF6FF',color:'#1D4ED8'}}>STK INI</th>
+              <th style={{background:'#EFF6FF',color:'#1D4ED8'}}>STK INICIAL</th>
               <th style={{background:'#F0FDF4',color:'#166534'}}>ENTREGA</th>
               <th style={{background:'#FFF7ED',color:'#9A3412'}}>CONS. TEÓRICO</th>
-              <th style={{background:'#F5F3FF',color:'#6D28D9'}}>STK FINAL</th>
-              <th style={{background:'#FFF1F2',color:'#9F1239'}}>CONS. REAL</th>
-              <th>% DESVÍO</th>
+              <th style={{background:'#F5F3FF',color:'#6D28D9'}}>STK FINAL TEÓRICO</th>
+              <th style={{background:'#FEF3C7',color:'#92400E'}}>STK FINAL REAL</th>
+              <th>DIFERENCIA</th>
             </tr></thead>
             <tbody>
               {tablaFiltrada.map(p=>(
-                <tr key={p.id} style={{opacity:p.tieneDatos?1:.65}}>
-                  <td><strong>{p.nombre}</strong>{!p.tieneDatos&&<span className="text-sm" style={{color:'var(--text3)',marginLeft:6}}>sin stock</span>}</td>
+                <tr key={p.id} style={{opacity:p.consTeo>0||p.tieneDatos?1:.45}}>
+                  <td>
+                    <strong>{p.nombre}</strong>
+                    {!p.tieneDatos&&<span className="text-sm" style={{color:'var(--text3)',marginLeft:6}}>sin stock</span>}
+                  </td>
                   <td>{p.unidad}</td>
-                  <td style={{background:'#EFF6FF33',fontWeight:500}}>{p.tieneDatos?fmtNum(p.stkIni,2):'—'}</td>
-                  <td style={{background:'#F0FDF433',fontWeight:500}}>{p.tieneDatos?fmtNum(p.entrega,2):'—'}</td>
-                  <td style={{background:'#FFF7ED33',fontWeight:600}}>{fmtNum(p.consTeo,3)}</td>
-                  <td style={{background:'#F5F3FF33',fontWeight:500}}>{p.tieneDatos?fmtNum(p.stkFinal,2):'—'}</td>
-                  <td style={{background:'#FFF1F233',fontWeight:500}}>{p.tieneDatos?fmtNum(p.consReal,2):'—'}</td>
-                  <td>{p.tieneDatos?(
-                    <span style={{fontWeight:600,color:desvioColor(p.desvio)}}>{desvioLabel(p.desvio)}</span>
-                  ):'—'}</td>
+                  <td style={{background:'#EFF6FF22',fontWeight:500}}>
+                    {p.stkIni!==null?fmtNum(p.stkIni,3):<span style={{color:'var(--text3)'}}>—</span>}
+                  </td>
+                  <td style={{background:'#F0FDF422',fontWeight:500}}>
+                    {p.entrega>0?fmtNum(p.entrega,3):<span style={{color:'var(--text3)'}}>—</span>}
+                  </td>
+                  <td style={{background:'#FFF7ED22',fontWeight:600}}>{fmtNum(p.consTeo,3)}</td>
+                  <td style={{background:'#F5F3FF22',fontWeight:500}}>
+                    {p.stkFinTeo!==null?fmtNum(p.stkFinTeo,3):<span style={{color:'var(--text3)'}}>—</span>}
+                  </td>
+                  <td style={{background:'#FEF3C722',fontWeight:500}}>
+                    {p.stkFin!==null?fmtNum(p.stkFin,3):<span style={{color:'var(--text3)'}}>—</span>}
+                  </td>
+                  <td>
+                    {p.diferencia!==null?(
+                      <span style={{fontWeight:600,color:desvioColor(p.desvio||0)}}>
+                        {p.diferencia>0?'+':''}{fmtNum(p.diferencia,3)}
+                        {p.desvio!==null&&<span style={{fontSize:11,marginLeft:4,fontWeight:400}}>({p.desvio>0?'+':''}{p.desvio}%)</span>}
+                      </span>
+                    ):<span style={{color:'var(--text3)'}}>—</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table></div>
           <p className="text-sm mt-1" style={{color:'var(--text3)'}}>
-            % Desvío = (Consumo real - Consumo teórico) / Consumo teórico. Positivo = más consumo del esperado.
+            STK Final Teórico = STK Inicial + Entrega − Consumo Teórico · Diferencia = STK Final Real − STK Final Teórico
           </p>
         </div>
       </>)}
