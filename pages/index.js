@@ -7,9 +7,11 @@ const fmtDate = iso => { if(!iso) return '—'; const [y,m,d]=iso.split('-'); re
 const fmtNum = (n,dec=3) => parseFloat(n||0).toFixed(dec);
 
 function getToken(){ return typeof window!=='undefined'?localStorage.getItem('rp_token'):null; }
+function getSucursalId(){ return typeof window!=='undefined'?localStorage.getItem('rp_sucursal_id'):null; }
 async function apiFetch(path,opts={}){
   const token=getToken();
-  const res=await fetch('/api'+path,{...opts,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{}),...(opts.headers||{})},body:opts.body?JSON.stringify(opts.body):undefined});
+  const sucursalId=getSucursalId();
+  const res=await fetch('/api'+path,{...opts,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{}),...(sucursalId?{'x-restaurante-id':sucursalId}:{}),...(opts.headers||{})},body:opts.body?JSON.stringify(opts.body):undefined});
   if(!res.ok){const e=await res.json().catch(()=>({error:'Error'}));throw new Error(e.error||`HTTP ${res.status}`);}
   return res.json();
 }
@@ -695,60 +697,220 @@ function Consumo(){
 
 // ── LOGIN ────────────────────────────────────────────────
 function Login({onLogin}){
-  const[form,setForm]=useState({username:'',password:''});
+  const[modo,setModo]=useState('login'); // 'login' | 'registro'
+  const[form,setForm]=useState({email:'',password:'',nombre:''});
   const[loading,setLoading]=useState(false);
   const[error,setError]=useState('');
+  const[mensaje,setMensaje]=useState('');
+  const[sucursales,setSucursales]=useState(null); // null = no logueado, [] = eligiendo
+  const[tokenTemp,setTokenTemp]=useState(null);
+  const[usuarioTemp,setUsuarioTemp]=useState(null);
   const[branding,setBranding]=useState(null);
 
   useEffect(()=>{
-    // Try to load branding from localStorage cache
     try{const b=localStorage.getItem('rp_branding');if(b)setBranding(JSON.parse(b));}catch(e){}
   },[]);
 
   const submit=async()=>{
-    if(!form.username||!form.password){setError('Completá usuario y contraseña');return;}
+    if(!form.email||!form.password){setError('Completá email y contraseña');return;}
     setLoading(true);setError('');
     try{
-      const data=await apiFetch('/auth/login',{method:'POST',body:{username:form.username,password:form.password}});
-      localStorage.setItem('rp_token',data.token);
-      localStorage.setItem('rp_user',JSON.stringify(data.restaurante));
-      // Load and cache branding
-      try{
-        const b=await apiFetch('/branding');
-        if(b){localStorage.setItem('rp_branding',JSON.stringify(b));applyBranding(b);}
-      }catch(e){}
-      onLogin(data.restaurante);
+      const data=await fetch('/api/auth/login-nuevo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:form.email,password:form.password})}).then(r=>r.json());
+      if(data.error) throw new Error(data.error);
+      if(data.sucursales.length===1){
+        // Una sola sucursal: entrar directo
+        finalizarLogin(data.token, data.usuario, data.sucursales[0]);
+      } else {
+        // Múltiples sucursales: mostrar selector
+        setTokenTemp(data.token);
+        setUsuarioTemp(data.usuario);
+        setSucursales(data.sucursales);
+      }
     }catch(e){setError(e.message);}
     setLoading(false);
   };
 
-  const primaryColor = branding?.primaryColor||'#1c1917';
-  const appName = branding?.appName||'RecetasPro';
+  const registro=async()=>{
+    if(!form.nombre||!form.email||!form.password){setError('Completá todos los campos');return;}
+    setLoading(true);setError('');
+    try{
+      const data=await fetch('/api/auth/registro',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)}).then(r=>r.json());
+      if(data.error) throw new Error(data.error);
+      setMensaje(data.mensaje);setModo('login');setForm({email:form.email,password:'',nombre:''});
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  };
 
-  return(<div className="login-page">
-    <div className="login-card">
+  const finalizarLogin=(token,usuario,sucursal)=>{
+    localStorage.setItem('rp_token',token);
+    localStorage.setItem('rp_user',JSON.stringify({...usuario,sucursal}));
+    localStorage.setItem('rp_sucursal_id',sucursal.id);
+    localStorage.setItem('rp_modulos',JSON.stringify(sucursal.modulos||'all'));
+    onLogin({...usuario,sucursal,modulos:sucursal.modulos||'all'});
+  };
+
+  const primaryColor=branding?.primaryColor||'#1c1917';
+  const appName=branding?.appName||'RecetasPro';
+
+  // Selector de sucursal
+  if(sucursales){
+    return(<div className="login-page"><div className="login-card">
       <div className="login-logo">
         {branding?.logoBase64||branding?.logoUrl
           ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:56,objectFit:'contain',marginBottom:8}}/>
-          : <div style={{width:52,height:52,borderRadius:12,background:primaryColor,display:'inline-flex',alignItems:'center',justifyContent:'center',marginBottom:8,fontSize:24}}>👨‍🍳</div>
+          : <div style={{width:52,height:52,borderRadius:12,background:primaryColor,display:'inline-flex',alignItems:'center',justifyContent:'center',marginBottom:8,fontSize:24}}>🏪</div>
         }
-        <h1>{appName}</h1>
-        <p>Gestión gastronómica inteligente</p>
+        <h1>Seleccioná una sucursal</h1>
+        <p style={{color:'var(--text2)',fontSize:13}}>Bienvenido/a, {usuarioTemp?.nombre}</p>
       </div>
-      <div className="form-field" style={{marginBottom:12}}><label>Usuario</label><input value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="tu_usuario" onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
+      <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+        {sucursales.map(s=>(
+          <button key={s.id} className="btn" style={{justifyContent:'flex-start',padding:'12px 16px',fontSize:14}}
+            onClick={()=>finalizarLogin(tokenTemp,usuarioTemp,s)}>
+            🏪 {s.nombre}
+          </button>
+        ))}
+      </div>
+      <button className="btn btn-sm mt-1" style={{width:'100%',marginTop:12,color:'var(--text2)'}} onClick={()=>{setSucursales(null);setTokenTemp(null);}}>← Volver</button>
+    </div></div>);
+  }
+
+  return(<div className="login-page"><div className="login-card">
+    <div className="login-logo">
+      {branding?.logoBase64||branding?.logoUrl
+        ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:56,objectFit:'contain',marginBottom:8}}/>
+        : <div style={{width:52,height:52,borderRadius:12,background:primaryColor,display:'inline-flex',alignItems:'center',justifyContent:'center',marginBottom:8,fontSize:24}}>👨‍🍳</div>
+      }
+      <h1>{appName}</h1>
+      <p>Gestión gastronómica inteligente</p>
+    </div>
+
+    {mensaje&&<div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:6,padding:'8px 12px',fontSize:13,color:'#166534',marginBottom:12}}>{mensaje}</div>}
+
+    {modo==='login'&&(<>
+      <div className="form-field" style={{marginBottom:12}}><label>Email</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="tu@email.com" onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
       <div className="form-field" style={{marginBottom:12}}><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="••••••••" onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
       {error&&<p className="login-error">{error}</p>}
       <button className="btn btn-primary btn-block mt-1" style={{background:primaryColor,borderColor:primaryColor}} onClick={submit} disabled={loading}>{loading?'Ingresando...':'Ingresar'}</button>
+      <button className="btn btn-block mt-1" style={{marginTop:8}} onClick={()=>{setModo('registro');setError('');}}>Crear cuenta nueva</button>
+    </>)}
+
+    {modo==='registro'&&(<>
+      <div className="form-field" style={{marginBottom:10}}><label>Nombre completo</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="Tu nombre"/></div>
+      <div className="form-field" style={{marginBottom:10}}><label>Email</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="tu@email.com"/></div>
+      <div className="form-field" style={{marginBottom:10}}><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mínimo 6 caracteres"/></div>
+      {error&&<p className="login-error">{error}</p>}
+      <button className="btn btn-primary btn-block mt-1" style={{background:primaryColor,borderColor:primaryColor}} onClick={registro} disabled={loading}>{loading?'Creando cuenta...':'Crear cuenta'}</button>
+      <button className="btn btn-block mt-1" style={{marginTop:8,color:'var(--text2)'}} onClick={()=>{setModo('login');setError('');}}>← Ya tengo cuenta</button>
+    </>)}
+  </div></div>);
+}
+
+
+// ── USUARIOS (superadmin) ────────────────────────────────
+function Usuarios(){
+  const[usuarios,setUsuarios]=useState([]);
+  const[restaurantes,setRestaurantes]=useState([]);
+  const[editing,setEditing]=useState(null);
+  const[loading,setLoading]=useState(false);
+
+  const TODOS_MODULOS=['productos','intermedias','finales','ventas','entregas','stock','stocklink','consumo','branding'];
+  const MODULO_LABELS={productos:'Productos brutos',intermedias:'Recetas intermedias',finales:'Platos finales',ventas:'Ventas',entregas:'Entregas',stock:'Stock semanal',stocklink:'Link de stock',consumo:'Consumo teórico',branding:'Branding'};
+
+  const load=async()=>{
+    const[u,r]=await Promise.all([apiFetch('/usuarios'),apiFetch('/restaurantes-lista')]);
+    setUsuarios(u);setRestaurantes(r);
+  };
+  useEffect(()=>{load();},[]);
+
+  const aprobar=async(u)=>{
+    await apiFetch(`/usuarios/${u.id}`,{method:'PUT',body:{activo:true}});load();
+  };
+
+  const toggleModulo=(permiso,modulo,checked)=>{
+    const mods=permiso.modulos||[];
+    return checked?[...mods,modulo]:mods.filter(m=>m!==modulo);
+  };
+
+  const guardarPermisos=async()=>{
+    setLoading(true);
+    await apiFetch(`/usuarios/${editing.id}`,{method:'PUT',body:{activo:editing.activo,permisos:editing.permisos}});
+    setEditing(null);setLoading(false);load();
+  };
+
+  return(<div className="page active">
+    <div className="page-header"><h2>Gestión de usuarios</h2><p>Aprobá usuarios y asigná sucursales y módulos</p></div>
+
+    <div className="card">
+      <div className="card-title">Usuarios registrados</div>
+      <div className="table-wrap"><table>
+        <thead><tr><th>Nombre</th><th>Email</th><th>Estado</th><th>Sucursales</th><th></th></tr></thead>
+        <tbody>
+          {!usuarios.length&&<tr><td colSpan={5}><div className="empty-state"><div className="icon">👥</div><p>Sin usuarios aún.</p></div></td></tr>}
+          {usuarios.map(u=>(
+            <tr key={u.id}>
+              <td><strong>{u.nombre}</strong>{u.es_superadmin&&<span className="badge badge-blue" style={{marginLeft:6}}>Superadmin</span>}</td>
+              <td>{u.email}</td>
+              <td>{u.activo?<span className="badge badge-green">Activo</span>:<span className="badge badge-amber">Pendiente</span>}</td>
+              <td><span className="text-sm">{(u.permisos||[]).map(p=>p.restaurante_nombre).join(', ')||'—'}</span></td>
+              <td style={{display:'flex',gap:4}}>
+                {!u.activo&&!u.es_superadmin&&<button className="btn btn-sm badge-green" onClick={()=>aprobar(u)}>✓ Aprobar</button>}
+                {!u.es_superadmin&&<button className="btn btn-sm" onClick={()=>setEditing({...u,permisos:u.permisos||[]})}>✏️ Permisos</button>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
     </div>
+
+    {editing&&(
+      <Modal title={`Permisos de ${editing.nombre}`} onClose={()=>setEditing(null)} wide>
+        <div style={{marginBottom:12}}>
+          <label style={{display:'flex',alignItems:'center',gap:8,fontSize:14,cursor:'pointer'}}>
+            <input type="checkbox" checked={editing.activo} onChange={e=>setEditing({...editing,activo:e.target.checked})}/>
+            Usuario activo (puede ingresar)
+          </label>
+        </div>
+        <div className="card-title" style={{fontSize:13}}>Sucursales y módulos habilitados</div>
+        {restaurantes.map(r=>{
+          const permiso=editing.permisos.find(p=>p.restaurante_id===r.id)||{restaurante_id:r.id,modulos:[]};
+          const tieneAcceso=editing.permisos.some(p=>p.restaurante_id===r.id);
+          return(<div key={r.id} style={{border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:8}}>
+            <label style={{display:'flex',alignItems:'center',gap:8,fontWeight:500,marginBottom:tieneAcceso?8:0,cursor:'pointer'}}>
+              <input type="checkbox" checked={tieneAcceso} onChange={e=>{
+                if(e.target.checked) setEditing({...editing,permisos:[...editing.permisos,{restaurante_id:r.id,modulos:[]}]});
+                else setEditing({...editing,permisos:editing.permisos.filter(p=>p.restaurante_id!==r.id)});
+              }}/> {r.nombre}
+            </label>
+            {tieneAcceso&&(<div style={{display:'flex',flexWrap:'wrap',gap:6,marginLeft:24}}>
+              <label style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:4,padding:'3px 8px',borderRadius:4,background:'var(--bg3)',fontWeight:600}}>
+                <input type="checkbox" checked={permiso.modulos.length===0} onChange={e=>{
+                  if(e.target.checked) setEditing({...editing,permisos:editing.permisos.map(p=>p.restaurante_id===r.id?{...p,modulos:[]}:p)});
+                }}/> Todos
+              </label>
+              {TODOS_MODULOS.map(m=>(
+                <label key={m} style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:4,padding:'3px 8px',borderRadius:4,background:permiso.modulos.includes(m)?'var(--primary)':'var(--bg3)',color:permiso.modulos.includes(m)?'var(--primary-fg)':'var(--text2)'}}>
+                  <input type="checkbox" style={{display:'none'}} checked={permiso.modulos.includes(m)} onChange={e=>{
+                    const newMods=toggleModulo(permiso,m,e.target.checked);
+                    setEditing({...editing,permisos:editing.permisos.map(p=>p.restaurante_id===r.id?{...p,modulos:newMods}:p)});
+                  }}/>{MODULO_LABELS[m]}
+                </label>
+              ))}
+            </div>)}
+          </div>);
+        })}
+        <button className="btn btn-primary btn-block mt-1" onClick={guardarPermisos} disabled={loading}>{loading?'Guardando...':'Guardar permisos'}</button>
+      </Modal>
+    )}
   </div>);
 }
 
 // ── APP ──────────────────────────────────────────────────
-const NAV=[
+const TODOS_NAV=[
   {section:'Recetas',items:[{id:'productos',label:'Productos brutos',icon:'📦'},{id:'intermedias',label:'Recetas intermedias',icon:'🧪'},{id:'finales',label:'Platos finales',icon:'🍽️'}]},
   {section:'Operaciones',items:[{id:'ventas',label:'Ventas',icon:'💰'},{id:'entregas',label:'Entregas',icon:'🚚'},{id:'stock',label:'Stock semanal',icon:'📊'},{id:'stocklink',label:'Link de stock',icon:'🔗'}]},
   {section:'Análisis',items:[{id:'consumo',label:'Consumo teórico',icon:'📈'}]},
-  {section:'Config',items:[{id:'branding',label:'Branding',icon:'🎨'}]},
+  {section:'Config',items:[{id:'branding',label:'Branding',icon:'🎨'},{id:'usuarios',label:'Usuarios',icon:'👥'}]},
 ];
 
 export default function App(){
@@ -766,48 +928,54 @@ export default function App(){
   },[]);
 
   const loadAll=useCallback(async()=>{
-    const[p,i,f]=await Promise.all([api.getProductos(),api.getIntermedias(),api.getFinales()]);
+    const[p,i,f]=await Promise.all([apiFetch('/productos'),apiFetch('/intermedias'),apiFetch('/finales')]);
     setDb({productos:p,intermedias:i,finales:f});
-    try{
-      const b=await apiFetch('/branding');
-      if(b){setBranding(b);applyBranding(b);localStorage.setItem('rp_branding',JSON.stringify(b));}
-    }catch(e){}
+    try{const b=await apiFetch('/branding');if(b){setBranding(b);applyBranding(b);localStorage.setItem('rp_branding',JSON.stringify(b));}}catch(e){}
   },[]);
 
   useEffect(()=>{if(user)loadAll();},[user,loadAll]);
 
   const logout=()=>{
-    localStorage.removeItem('rp_token');
-    localStorage.removeItem('rp_user');
-    localStorage.removeItem('rp_branding');
+    ['rp_token','rp_user','rp_branding','rp_sucursal_id','rp_modulos'].forEach(k=>localStorage.removeItem(k));
     setUser(null);
   };
 
   if(!user) return <Login onLogin={u=>setUser(u)}/>;
+
+  // Filtrar módulos según permisos del usuario
+  const modulos=user.modulos||'all';
+  const tieneAcceso=m=>modulos==='all'||user.esSuperadmin||(Array.isArray(modulos)&&(modulos.length===0||modulos.includes(m)));
+
+  const NAV=TODOS_NAV.map(s=>({...s,items:s.items.filter(item=>{
+    if(item.id==='usuarios') return user.esSuperadmin;
+    return tieneAcceso(item.id);
+  })})).filter(s=>s.items.length>0);
 
   const renderPage=()=>{
     if(page==='productos') return <Productos data={db.productos} onRefresh={loadAll}/>;
     if(page==='intermedias') return <Intermedias data={db.intermedias} productos={db.productos} onRefresh={loadAll}/>;
     if(page==='finales') return <Finales data={db.finales} productos={db.productos} intermedias={db.intermedias} onRefresh={loadAll}/>;
     if(page==='ventas') return <Ventas finales={db.finales}/>;
-    if(page==='entregas') return <Entregas productos={db.productos}/>;
+    if(page==='entregas') return <Entregas productos={db.productos} intermedias={db.intermedias}/>;
     if(page==='stock') return <Stock productos={db.productos}/>;
     if(page==='stocklink') return <StockLink productos={db.productos}/>;
     if(page==='consumo') return <Consumo/>;
     if(page==='branding') return <Branding onSave={b=>{setBranding(b);applyBranding(b);localStorage.setItem('rp_branding',JSON.stringify(b));}}/>;
+    if(page==='usuarios') return <Usuarios/>;
   };
 
   const sidebarBg=branding?.primaryColor||'var(--bg2)';
   const sidebarTxt=branding?.secondaryColor||'var(--text2)';
+  const sucursalNombre=user.sucursal?.nombre||user.nombre;
 
   return(<div className="app">
     <div className="sidebar" style={{background:sidebarBg}}>
       <div className="sidebar-header" style={{borderColor:'rgba(255,255,255,.15)'}}>
         {branding?.logoBase64||branding?.logoUrl
           ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:36,objectFit:'contain',marginBottom:4}}/>
-          : <div className="rest-name" style={{color:sidebarTxt}}>{branding?.appName||user.nombre}</div>
+          : <div className="rest-name" style={{color:sidebarTxt}}>{branding?.appName||'RecetasPro'}</div>
         }
-        <div className="rest-sub" style={{color:sidebarTxt,opacity:.7}}>{user.nombre}</div>
+        <div className="rest-sub" style={{color:sidebarTxt,opacity:.7}}>{sucursalNombre}</div>
       </div>
       {NAV.map(s=>(<div className="nav-section" key={s.section}>
         <div className="nav-label" style={{color:sidebarTxt,opacity:.5}}>{s.section}</div>
@@ -819,350 +987,10 @@ export default function App(){
         </div>))}
       </div>))}
       <div className="sidebar-footer" style={{borderColor:'rgba(255,255,255,.15)'}}>
+        {user.esSuperadmin&&<div style={{fontSize:11,color:sidebarTxt,opacity:.5,marginBottom:6}}>Superadmin</div>}
         <button className="logout-btn" style={{color:sidebarTxt,opacity:.7}} onClick={logout}>🚪 Cerrar sesión</button>
       </div>
     </div>
     <div className="content">{renderPage()}</div>
   </div>);
-}
-
-// ── ENTREGAS ─────────────────────────────────────────────
-function Entregas({productos}){
-  const[entregas,setEntregas]=useState([]);
-  const[form,setForm]=useState({fecha:today(),producto_id:'',producto_nombre:'',unidad:'kg',cantidad:0,proveedor:'',notas:''});
-  const[filtroDesde,setFiltroDesde]=useState('');
-  const[filtroHasta,setFiltroHasta]=useState('');
-  const[search,setSearch]=useState('');
-  // PDF import state
-  const[pdfModal,setPdfModal]=useState(false);
-  const[pdfLoading,setPdfLoading]=useState(false);
-  const[pdfItems,setPdfItems]=useState(null);
-  const[pdfMeta,setPdfMeta]=useState({proveedor:'',fecha:today(),numero:''});
-
-  const load=useCallback(async()=>{
-    let url='/entregas';
-    if(filtroDesde&&filtroHasta) url+=`?desde=${filtroDesde}&hasta=${filtroHasta}`;
-    setEntregas(await apiFetch(url));
-  },[filtroDesde,filtroHasta]);
-
-  useEffect(()=>{load();},[load]);
-
-  const save=async()=>{
-    if(!form.fecha||!form.producto_nombre){alert('Completá fecha y producto');return;}
-    await apiFetch('/entregas',{method:'POST',body:{...form,cantidad:parseFloat(form.cantidad)||0,producto_id:form.producto_id?parseInt(form.producto_id):null}});
-    setForm({fecha:today(),producto_id:'',producto_nombre:'',unidad:'kg',cantidad:0,proveedor:'',notas:''});
-    load();
-  };
-
-  const del=async id=>{if(!confirm('¿Eliminar?'))return;await apiFetch(`/entregas/${id}`,{method:'DELETE'});load();};
-
-  const handleProdSelect=e=>{
-    const prod=productos.find(p=>p.id===parseInt(e.target.value));
-    if(prod) setForm({...form,producto_id:prod.id,producto_nombre:prod.nombre,unidad:prod.unidad});
-    else setForm({...form,producto_id:'',producto_nombre:'',unidad:'kg'});
-  };
-
-  const parsearRemito=(texto)=>{
-    const nroMatch=texto.match(/Remito\s*Nro[:\s]+([\S]+)/i);
-    const fechaMatch=texto.match(/Fecha[:\s]+(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i);
-    const provMatch=texto.match(/Nombre[:\s]+(.+?)(?:Local:|\n)/i);
-    let fechaISO=today();
-    if(fechaMatch){
-      const parts=fechaMatch[1].split(/[\/-]/);
-      if(parts.length===3){const[d,m,y]=parts;fechaISO=`${y.length===2?'20'+y:y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;}
-    }
-    const tieneEnviado=/ENVIADO/i.test(texto);
-    const items=[];const lines=texto.split('\n');let inItems=false;
-    for(const line of lines){
-      if(/SKU\s+DESC/i.test(line)||/SKU\s+PRODUCTO/i.test(line)){inItems=true;continue;}
-      if(/Observa|Firma|Total/i.test(line)){inItems=false;continue;}
-      if(!inItems) continue;
-      const l=line.trim();if(!l) continue;
-      const m=l.match(/^(\S+)\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s*(kg|un|lts?|grs?|und|litro|cc|u)\s+(?:(\d+(?:[.,]\d+)?)\s*(kg|un|lts?|grs?|und|litro|cc|u))?\s*$/i);
-      if(m){
-        const[,sku,desc,c1,u1,c2,u2]=m;
-        const cant=tieneEnviado&&c2!=null?parseFloat(c2.replace(',','.')):parseFloat(c1.replace(',','.'));
-        const unit=tieneEnviado&&u2?u2:u1;
-        if(cant>0) items.push({sku,descripcion:desc.trim(),cantidad:cant,unidad:unit});
-      }
-    }
-    return{proveedor:provMatch?provMatch[1].trim():'',fecha:fechaISO,numero:nroMatch?nroMatch[1]:'',items};
-  };
-
-  const handlePDF=async e=>{
-    const file=e.target.files[0];if(!file) return;
-    setPdfLoading(true);
-    try{
-      if(!window.pdfjsLib){
-        await new Promise((res,rej)=>{
-          const s=document.createElement('script');
-          s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-          s.onload=res;s.onerror=rej;document.head.appendChild(s);
-        });
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      }
-      const arrayBuffer=await file.arrayBuffer();
-      const pdf=await window.pdfjsLib.getDocument({data:arrayBuffer}).promise;
-      let texto='';
-      for(let i=1;i<=pdf.numPages;i++){
-        const page=await pdf.getPage(i);const ct=await page.getTextContent();
-        const lineMap={};
-        for(const it of ct.items){const y=Math.round(it.transform[5]);if(!lineMap[y])lineMap[y]=[];lineMap[y].push(it.str);}
-        Object.keys(lineMap).map(Number).sort((a,b)=>b-a).forEach(y=>{texto+=lineMap[y].join(' ')+'\n';});
-      }
-      const data=parsearRemito(texto);
-      setPdfMeta({proveedor:data.proveedor,fecha:data.fecha,numero:data.numero});
-      setPdfItems(data.items.map((item,i)=>({
-        ...item,id:i,activo:true,
-        producto_id:productos.find(p=>
-          p.nombre.toLowerCase().includes(item.descripcion.toLowerCase().slice(0,10))||
-          (item.sku&&p.notas&&p.notas.toLowerCase()===item.sku.toLowerCase())
-        )?.id||null
-      })));
-      setPdfModal(true);
-    }catch(err){alert('Error al leer el PDF: '+err.message);}
-    setPdfLoading(false);e.target.value='';
-  };
-
-  const confirmarPDF=async()=>{
-    const activos=pdfItems.filter(i=>i.activo&&parseFloat(i.cantidad)>0);
-    for(const item of activos){
-      const prod=item.producto_id?productos.find(p=>p.id===item.producto_id):null;
-      await apiFetch('/entregas',{method:'POST',body:{
-        fecha:pdfMeta.fecha,
-        producto_id:prod?.id||null,
-        producto_nombre:prod?.nombre||item.descripcion,
-        unidad:item.unidad||prod?.unidad||'kg',
-        cantidad:parseFloat(item.cantidad)||0,
-        proveedor:pdfMeta.proveedor,
-        notas:pdfMeta.numero?`Remito ${pdfMeta.numero}`:null,
-      }});
-    }
-    setPdfModal(false);setPdfItems(null);
-    load();
-    alert(`✓ ${activos.length} ítems importados`);
-  };
-
-  const filtered=entregas.filter(e=>!search||e.producto_nombre.toLowerCase().includes(search.toLowerCase()));
-
-  return(<div className="page active">
-    <div className="page-header"><h2>Entregas</h2><p>Ingreso de mercadería desde proveedores</p></div>
-
-    {/* Importar PDF */}
-    <div className="card">
-      <div className="card-title">Importar remito PDF</div>
-      <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
-        <label className="btn" style={{cursor:'pointer'}}>
-          {pdfLoading?'Leyendo PDF...':'📄 Subir PDF de remito'}
-          <input type="file" accept=".pdf" style={{display:'none'}} onChange={handlePDF} disabled={pdfLoading}/>
-        </label>
-        <span className="text-sm" style={{color:'var(--text2)'}}>El sistema lee el PDF y te muestra los ítems para que los revises antes de confirmar</span>
-      </div>
-    </div>
-
-    {/* Carga manual */}
-    <div className="card">
-      <div className="card-title">Carga manual</div>
-      <div className="form-row" style={{flexWrap:'wrap'}}>
-        <div className="form-field" style={{minWidth:120}}><label>Fecha</label><input type="date" value={form.fecha} onChange={e=>setForm({...form,fecha:e.target.value})}/></div>
-        <div className="form-field" style={{flex:2,minWidth:180}}><label>Producto</label>
-          <select value={form.producto_id} onChange={handleProdSelect}>
-            <option value="">— Seleccioná o escribí abajo —</option>
-            {[...productos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
-          </select>
-        </div>
-        <div className="form-field" style={{flex:2,minWidth:160}}><label>Nombre (si no está en lista)</label>
-          <input value={form.producto_nombre} onChange={e=>setForm({...form,producto_nombre:e.target.value})} placeholder="ej: Aceite de soja x 5L"/>
-        </div>
-        <div className="form-field" style={{minWidth:70}}><label>Unidad</label>
-          <select value={form.unidad} onChange={e=>setForm({...form,unidad:e.target.value})}>
-            {['kg','g','und','unidad','litro','lts','grs','porcion'].map(u=><option key={u}>{u}</option>)}
-          </select>
-        </div>
-        <div className="form-field" style={{minWidth:90}}><label>Cantidad</label><input type="number" min="0" step="0.01" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})}/></div>
-        <div className="form-field" style={{minWidth:130}}><label>Proveedor</label><input value={form.proveedor} onChange={e=>setForm({...form,proveedor:e.target.value})} placeholder="ej: Roll Factory"/></div>
-        <div className="form-field" style={{minWidth:120}}><label>Notas</label><input value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="ej: Remito 123"/></div>
-        <button className="btn" onClick={save}>✓ Guardar</button>
-      </div>
-    </div>
-
-    {/* Historial */}
-    <div className="card">
-      <div className="card-title">
-        <span>Historial ({filtered.length})</span>
-        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-          <input placeholder="Buscar..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:150}}/>
-          <input type="date" value={filtroDesde} onChange={e=>setFiltroDesde(e.target.value)} title="Desde"/>
-          <input type="date" value={filtroHasta} onChange={e=>setFiltroHasta(e.target.value)} title="Hasta"/>
-          {(filtroDesde||filtroHasta||search)&&<button className="btn btn-sm" onClick={()=>{setFiltroDesde('');setFiltroHasta('');setSearch('');}}>✕</button>}
-        </div>
-      </div>
-      <div className="table-wrap"><table>
-        <thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Proveedor / Notas</th><th></th></tr></thead>
-        <tbody>
-          {!filtered.length&&<tr><td colSpan={5}><div className="empty-state"><div className="icon">📦</div><p>Sin entregas cargadas.</p></div></td></tr>}
-          {filtered.map(e=>(<tr key={e.id}>
-            <td>{fmtDate(e.fecha)}</td>
-            <td><strong>{e.producto_nombre}</strong></td>
-            <td><strong>{fmtNum(e.cantidad,3)}</strong> {e.unidad}</td>
-            <td><span className="text-sm" style={{color:'var(--text3)'}}>{e.notas||'—'}</span></td>
-            <td><button className="btn btn-sm btn-danger" onClick={()=>del(e.id)}>🗑</button></td>
-          </tr>))}
-        </tbody>
-      </table></div>
-    </div>
-
-    {/* Modal revisión PDF */}
-    {pdfModal&&pdfItems&&(
-      <Modal title="Revisar remito importado" onClose={()=>{setPdfModal(false);setPdfItems(null);}} wide>
-        <div className="form-grid mb-1" style={{marginBottom:12}}>
-          <div className="form-field"><label>Proveedor</label><input value={pdfMeta.proveedor} onChange={e=>setPdfMeta({...pdfMeta,proveedor:e.target.value})}/></div>
-          <div className="form-field"><label>Fecha</label><input type="date" value={pdfMeta.fecha} onChange={e=>setPdfMeta({...pdfMeta,fecha:e.target.value})}/></div>
-          <div className="form-field"><label>Nro. Remito</label><input value={pdfMeta.numero} onChange={e=>setPdfMeta({...pdfMeta,numero:e.target.value})}/></div>
-        </div>
-        <div className="table-wrap" style={{marginBottom:12}}><table>
-          <thead><tr><th>✓</th><th>Descripción PDF</th><th>Producto del sistema</th><th>Cantidad</th><th>Unidad</th></tr></thead>
-          <tbody>{pdfItems.map((item,i)=>(
-            <tr key={i} style={{opacity:item.activo?1:.45}}>
-              <td><input type="checkbox" checked={item.activo} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],activo:e.target.checked};return a;})}/></td>
-              <td><span className="text-sm">{item.descripcion}</span>{item.sku&&<span className="badge badge-gray" style={{marginLeft:4,fontSize:10}}>{item.sku}</span>}</td>
-              <td>
-                <select value={item.producto_id||''} style={{fontSize:12}} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],producto_id:e.target.value?parseInt(e.target.value):null};return a;})}>
-                  <option value="">— Sin vincular —</option>
-                  {[...productos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
-                </select>
-              </td>
-              <td><input type="number" min="0" step="0.01" value={item.cantidad} style={{width:80}} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],cantidad:e.target.value};return a;})}/></td>
-              <td><select value={item.unidad||'kg'} style={{fontSize:12,width:60}} onChange={e=>setPdfItems(arr=>{const a=[...arr];a[i]={...a[i],unidad:e.target.value};return a;})}>
-                {['kg','g','und','unidad','lts','litro','grs'].map(u=><option key={u}>{u}</option>)}
-              </select></td>
-            </tr>
-          ))}</tbody>
-        </table></div>
-        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <button className="btn" onClick={()=>{setPdfModal(false);setPdfItems(null);}}>Cancelar</button>
-          <button className="btn btn-primary" onClick={confirmarPDF}>✓ Confirmar y guardar {pdfItems.filter(i=>i.activo).length} ítems</button>
-        </div>
-      </Modal>
-    )}
-  </div>);
-}
-
-// ── BRANDING ─────────────────────────────────────────────
-function Branding(){
-  const[config,setConfig]=useState({
-    primaryColor:'#DC2626',
-    secondaryColor:'#ffffff',
-    accentColor:'#991B1B',
-    appName:'RecetasPro',
-    logoUrl:'',
-    logoBase64:'',
-  });
-  const[saving,setSaving]=useState(false);
-  const[loaded,setLoaded]=useState(false);
-
-  useEffect(()=>{
-    apiFetch('/branding').then(data=>{
-      if(data) setConfig(c=>({...c,...data}));
-      setLoaded(true);
-    }).catch(()=>setLoaded(true));
-  },[]);
-
-  const save=async()=>{
-    setSaving(true);
-    await apiFetch('/branding',{method:'PUT',body:config});
-    setSaving(false);
-    // Aplicar cambios al CSS
-    applyBranding(config);
-    alert('✓ Branding guardado. Recargá la página para ver todos los cambios.');
-  };
-
-  const handleLogo=e=>{
-    const file=e.target.files[0];
-    if(!file) return;
-    const reader=new FileReader();
-    reader.onload=ev=>setConfig(c=>({...c,logoBase64:ev.target.result,logoUrl:''}));
-    reader.readAsDataURL(file);
-  };
-
-  if(!loaded) return <div className="page active"><div className="page-header"><h2>Branding</h2></div><div className="card"><p className="text-sm">Cargando...</p></div></div>;
-
-  return(<div className="page active">
-    <div className="page-header"><h2>Branding</h2><p>Personalizá la apariencia de la plataforma</p></div>
-
-    <div className="card">
-      <div className="card-title">Nombre e identidad</div>
-      <div className="form-grid mb-1">
-        <div className="form-field"><label>Nombre de la app</label><input value={config.appName} onChange={e=>setConfig({...config,appName:e.target.value})} placeholder="ej: Ai Sushi Control"/></div>
-      </div>
-      <div className="form-field mb-1">
-        <label>Logo (PNG, JPG, SVG)</label>
-        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
-          <label className="btn" style={{cursor:'pointer'}}>
-            📷 Subir logo
-            <input type="file" accept="image/*" style={{display:'none'}} onChange={handleLogo}/>
-          </label>
-          {(config.logoBase64||config.logoUrl)&&(
-            <img src={config.logoBase64||config.logoUrl} alt="Logo" style={{height:48,objectFit:'contain',border:'1px solid var(--border)',borderRadius:4,padding:4,background:'white'}}/>
-          )}
-          {(config.logoBase64||config.logoUrl)&&<button className="btn btn-sm btn-danger" onClick={()=>setConfig({...config,logoBase64:'',logoUrl:''})}>✕ Quitar logo</button>}
-        </div>
-      </div>
-    </div>
-
-    <div className="card">
-      <div className="card-title">Colores</div>
-      <div className="form-grid mb-1">
-        <div className="form-field">
-          <label>Color principal</label>
-          <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            <input type="color" value={config.primaryColor} onChange={e=>setConfig({...config,primaryColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
-            <input value={config.primaryColor} onChange={e=>setConfig({...config,primaryColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
-          </div>
-          <span className="text-sm">Sidebar, botones primarios, nav activo</span>
-        </div>
-        <div className="form-field">
-          <label>Color de acento</label>
-          <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            <input type="color" value={config.accentColor} onChange={e=>setConfig({...config,accentColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
-            <input value={config.accentColor} onChange={e=>setConfig({...config,accentColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
-          </div>
-          <span className="text-sm">Hover, badges, detalles</span>
-        </div>
-        <div className="form-field">
-          <label>Color de texto del sidebar</label>
-          <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            <input type="color" value={config.secondaryColor} onChange={e=>setConfig({...config,secondaryColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
-            <input value={config.secondaryColor} onChange={e=>setConfig({...config,secondaryColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
-          </div>
-          <span className="text-sm">Texto e íconos del menú lateral</span>
-        </div>
-      </div>
-
-      {/* Preview */}
-      <div style={{marginTop:12,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',maxWidth:360}}>
-        <div style={{background:config.primaryColor,padding:'12px 16px',display:'flex',alignItems:'center',gap:10}}>
-          {(config.logoBase64||config.logoUrl)?<img src={config.logoBase64||config.logoUrl} alt="logo" style={{height:28,objectFit:'contain'}}/>:
-            <span style={{fontWeight:700,fontSize:16,color:config.secondaryColor}}>{config.appName}</span>}
-        </div>
-        <div style={{background:config.primaryColor,padding:'4px 0',opacity:.9}}>
-          {['Productos brutos','Recetas intermedias','Ventas','Consumo teórico'].map(item=>(
-            <div key={item} style={{padding:'7px 16px',fontSize:13,color:config.secondaryColor,opacity:.85}}>{item}</div>
-          ))}
-        </div>
-      </div>
-    </div>
-
-    <button className="btn btn-primary" onClick={save} disabled={saving}>{saving?'Guardando...':'Guardar branding'}</button>
-  </div>);
-}
-
-function applyBranding(config){
-  if(!config) return;
-  const root=document.documentElement;
-  if(config.primaryColor){
-    root.style.setProperty('--brand-primary',config.primaryColor);
-    // Update sidebar background
-    document.querySelectorAll('.sidebar').forEach(el=>el.style.background=config.primaryColor);
-  }
 }

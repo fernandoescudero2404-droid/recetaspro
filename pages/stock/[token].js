@@ -129,7 +129,7 @@ export default function StockPublico() {
               <div key={r.id} style={{...s.row, borderBottom: undefined, paddingBottom:8, marginBottom:2}}>
                 <div style={{flex:1}}>
                   <div style={s.name}>{r.nombre}</div>
-                  <div style={s.sub}>1 kg de esta preparación = {parseFloat(r.factor_auto||1).toFixed(3)} kg de ingredientes brutos</div>
+
                 </div>
                 <input type="number" min="0" step="0.01" placeholder="0"
                   value={vals[`int_${r.id}`] ?? ''}
