@@ -807,6 +807,124 @@ function Login({onLogin}){
 }
 
 
+function Branding({onSave}){
+  const[config,setConfig]=useState({
+    primaryColor:'#DC2626',
+    secondaryColor:'#ffffff',
+    accentColor:'#991B1B',
+    appName:'RecetasPro',
+    logoUrl:'',
+    logoBase64:'',
+  });
+  const[saving,setSaving]=useState(false);
+  const[loaded,setLoaded]=useState(false);
+
+  useEffect(()=>{
+    apiFetch('/branding').then(data=>{
+      if(data) setConfig(c=>({...c,...data}));
+      setLoaded(true);
+    }).catch(()=>setLoaded(true));
+  },[]);
+
+  const save=async()=>{
+    setSaving(true);
+    await apiFetch('/branding',{method:'PUT',body:config});
+    setSaving(false);
+    applyBranding(config);
+    if(onSave) onSave(config);
+    alert('✓ Branding guardado.');
+  };
+
+  const handleLogo=e=>{
+    const file=e.target.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=ev=>setConfig(c=>({...c,logoBase64:ev.target.result,logoUrl:''}));
+    reader.readAsDataURL(file);
+  };
+
+  if(!loaded) return <div className="page active"><div className="page-header"><h2>Branding</h2></div><div className="card"><p className="text-sm">Cargando...</p></div></div>;
+
+  return(<div className="page active">
+    <div className="page-header"><h2>Branding</h2><p>Personalizá la apariencia de la plataforma</p></div>
+
+    <div className="card">
+      <div className="card-title">Nombre e identidad</div>
+      <div className="form-grid mb-1">
+        <div className="form-field"><label>Nombre de la app</label><input value={config.appName} onChange={e=>setConfig({...config,appName:e.target.value})} placeholder="ej: Ai Sushi Control"/></div>
+      </div>
+      <div className="form-field mb-1">
+        <label>Logo (PNG, JPG, SVG)</label>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <label className="btn" style={{cursor:'pointer'}}>
+            📷 Subir logo
+            <input type="file" accept="image/*" style={{display:'none'}} onChange={handleLogo}/>
+          </label>
+          {(config.logoBase64||config.logoUrl)&&(
+            <img src={config.logoBase64||config.logoUrl} alt="Logo" style={{height:48,objectFit:'contain',border:'1px solid var(--border)',borderRadius:4,padding:4,background:'white'}}/>
+          )}
+          {(config.logoBase64||config.logoUrl)&&<button className="btn btn-sm btn-danger" onClick={()=>setConfig({...config,logoBase64:'',logoUrl:''})}>✕ Quitar logo</button>}
+        </div>
+      </div>
+    </div>
+
+    <div className="card">
+      <div className="card-title">Colores</div>
+      <div className="form-grid mb-1">
+        <div className="form-field">
+          <label>Color principal</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="color" value={config.primaryColor} onChange={e=>setConfig({...config,primaryColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
+            <input value={config.primaryColor} onChange={e=>setConfig({...config,primaryColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
+          </div>
+          <span className="text-sm">Sidebar, botones primarios, nav activo</span>
+        </div>
+        <div className="form-field">
+          <label>Color de acento</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="color" value={config.accentColor} onChange={e=>setConfig({...config,accentColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
+            <input value={config.accentColor} onChange={e=>setConfig({...config,accentColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
+          </div>
+          <span className="text-sm">Hover, badges, detalles</span>
+        </div>
+        <div className="form-field">
+          <label>Color de texto del sidebar</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="color" value={config.secondaryColor} onChange={e=>setConfig({...config,secondaryColor:e.target.value})} style={{width:48,height:36,padding:2,border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}/>
+            <input value={config.secondaryColor} onChange={e=>setConfig({...config,secondaryColor:e.target.value})} style={{fontFamily:'monospace',fontSize:13}}/>
+          </div>
+          <span className="text-sm">Texto e íconos del menú lateral</span>
+        </div>
+      </div>
+
+      {/* Preview */}
+      <div style={{marginTop:12,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',maxWidth:360}}>
+        <div style={{background:config.primaryColor,padding:'12px 16px',display:'flex',alignItems:'center',gap:10}}>
+          {(config.logoBase64||config.logoUrl)?<img src={config.logoBase64||config.logoUrl} alt="logo" style={{height:28,objectFit:'contain'}}/>:
+            <span style={{fontWeight:700,fontSize:16,color:config.secondaryColor}}>{config.appName}</span>}
+        </div>
+        <div style={{background:config.primaryColor,padding:'4px 0',opacity:.9}}>
+          {['Productos brutos','Recetas intermedias','Ventas','Consumo teórico'].map(item=>(
+            <div key={item} style={{padding:'7px 16px',fontSize:13,color:config.secondaryColor,opacity:.85}}>{item}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <button className="btn btn-primary" onClick={save} disabled={saving}>{saving?'Guardando...':'Guardar branding'}</button>
+  </div>);
+}
+
+function applyBranding(config){
+  if(!config) return;
+  const root=document.documentElement;
+  if(config.primaryColor){
+    root.style.setProperty('--brand-primary',config.primaryColor);
+    // Update sidebar background
+    document.querySelectorAll('.sidebar').forEach(el=>el.style.background=config.primaryColor);
+  }
+}
+
 // ── USUARIOS (superadmin) ────────────────────────────────
 function Usuarios(){
   const[usuarios,setUsuarios]=useState([]);
