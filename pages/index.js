@@ -488,47 +488,82 @@ function StockLink({productos}){
 
 // ── CONSUMO TEÓRICO ───────────────────────────────────────
 function Consumo(){
+  const[modo,setModo]=useState('semana'); // 'semana' | 'multisemana'
   const[semanaDesde,setSemanaDesde]=useState(mondayOfWeek());
-  const[result,setResult]=useState(null);const[loading,setLoading]=useState(false);const[error,setError]=useState('');
-  const[filtroActivo,setFiltroActivo]=useState(false);const[prodFiltro,setProdFiltro]=useState(new Set());
-  const[tab,setTab]=useState('tabla'); // 'tabla' | 'detalle'
-
-  const calcular=async()=>{
-    const desde=semanaDesde; const hasta=addDays(semanaDesde,6);
-    setLoading(true);setError('');setResult(null);
-    try{const data=await api.getConsumo(desde,hasta);setResult({...data,desde,hasta});}
-    catch(e){setError(e.message);}setLoading(false);
-  };
+  const[multiDesde,setMultiDesde]=useState(addDays(mondayOfWeek(),-21)); // 4 semanas atrás
+  const[result,setResult]=useState(null);
+  const[multiResult,setMultiResult]=useState(null);
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState('');
+  const[filtroActivo,setFiltroActivo]=useState(false);
+  const[prodFiltro,setProdFiltro]=useState(new Set());
+  const[tab,setTab]=useState('tabla');
 
   const toggleProd=n=>setProdFiltro(prev=>{const s=new Set(prev);s.has(n)?s.delete(n):s.add(n);return s;});
+  const desvioColor=d=>{if(d===null)return'var(--text3)';return d>20?'#dc2626':d>10?'#d97706':d<-20?'#2563eb':d<-10?'#7c3aed':'#16a34a';};
+
+  const calcular=async()=>{
+    const desde=semanaDesde;const hasta=addDays(semanaDesde,6);
+    setLoading(true);setError('');setResult(null);
+    try{const data=await apiFetch(`/consumo?desde=${desde}&hasta=${hasta}`);setResult({...data,desde,hasta});}
+    catch(e){setError(e.message);}
+    setLoading(false);
+  };
+
+  const calcularMulti=async()=>{
+    setLoading(true);setError('');setMultiResult(null);
+    // Generar 4 semanas desde multiDesde
+    const semanas=[];
+    for(let i=0;i<4;i++){
+      const lunes=addDays(multiDesde,i*7);
+      const domingo=addDays(lunes,6);
+      semanas.push({desde:lunes,hasta:domingo});
+    }
+    try{
+      const resultados=await Promise.all(semanas.map(s=>apiFetch(`/consumo?desde=${s.desde}&hasta=${s.hasta}`).then(d=>({...d,...s}))));
+      setMultiResult(resultados);
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  };
 
   const tabla=result?.tablaComparativa||[];
   const tablaFiltrada=filtroActivo&&prodFiltro.size>0?tabla.filter(p=>prodFiltro.has(p.nombre)):tabla;
 
-  const desvioColor=d=>d>20?'#dc2626':d>10?'#d97706':d<-10?'#2563eb':'#16a34a';
-  const desvioLabel=d=>`${d>0?'+':''}${d.toFixed(1)}%`;
-
   return(<div className="page active">
-    <div className="page-header"><h2>Consumo teórico vs real</h2><p>Comparativa semanal de stock, entregas y consumo</p></div>
+    <div className="page-header"><h2>Consumo teórico vs real</h2><p>Comparativa de stock, entregas y consumo</p></div>
 
+    {/* Selector de modo */}
     <div className="card">
-      <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end'}}>
-        <div className="form-field"><label>Semana del lunes</label><input type="date" value={semanaDesde} onChange={e=>setSemanaDesde(e.target.value)}/></div>
-        <button className="btn" onClick={calcular} disabled={loading}>{loading?'Calculando...':'📊 Calcular semana'}</button>
-        {result&&<span className="text-sm" style={{color:'var(--text2)'}}>Semana: {fmtDate(result.desde)} → {fmtDate(result.hasta)}</span>}
+      <div style={{display:'flex',gap:8,marginBottom:12}}>
+        <button className={`tab${modo==='semana'?' active':''}`} onClick={()=>setModo('semana')} style={{padding:'6px 14px',borderRadius:6,border:'1px solid var(--border)',cursor:'pointer',background:modo==='semana'?'var(--primary)':'var(--bg2)',color:modo==='semana'?'var(--primary-fg)':'var(--text2)',fontWeight:500}}>📊 Una semana</button>
+        <button className={`tab${modo==='multisemana'?' active':''}`} onClick={()=>setModo('multisemana')} style={{padding:'6px 14px',borderRadius:6,border:'1px solid var(--border)',cursor:'pointer',background:modo==='multisemana'?'var(--primary)':'var(--bg2)',color:modo==='multisemana'?'var(--primary-fg)':'var(--text2)',fontWeight:500}}>📈 Múltiples semanas</button>
       </div>
+
+      {modo==='semana'&&(
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-field"><label>Semana del lunes</label><input type="date" value={semanaDesde} onChange={e=>setSemanaDesde(e.target.value)}/></div>
+          <button className="btn" onClick={calcular} disabled={loading}>{loading?'Calculando...':'📊 Calcular'}</button>
+          {result&&<span className="text-sm" style={{color:'var(--text2)'}}>Semana: {fmtDate(result.desde)} → {fmtDate(result.hasta)}</span>}
+        </div>
+      )}
+
+      {modo==='multisemana'&&(
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-field"><label>Primer lunes del período</label><input type="date" value={multiDesde} onChange={e=>setMultiDesde(e.target.value)}/></div>
+          <button className="btn" onClick={calcularMulti} disabled={loading}>{loading?'Calculando 4 semanas...':'📈 Calcular 4 semanas'}</button>
+        </div>
+      )}
       {error&&<p className="login-error mt-1">{error}</p>}
     </div>
 
-    {result&&result.tablaComparativa?.length>0&&(<>
-      {/* Tabs */}
+    {/* VISTA UNA SEMANA */}
+    {modo==='semana'&&result&&result.tablaComparativa?.length>0&&(<>
       <div className="tabs" style={{marginBottom:12}}>
         <button className={`tab${tab==='tabla'?' active':''}`} onClick={()=>setTab('tabla')}>📊 Tabla semanal</button>
         <button className={`tab${tab==='detalle'?' active':''}`} onClick={()=>setTab('detalle')}>📋 Ventas por plato</button>
       </div>
 
       {tab==='tabla'&&(<>
-        {/* Filtro */}
         <div className="card" style={{marginBottom:12}}>
           <div className="card-title"><span>Filtrar productos</span>
             <div style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -563,66 +598,149 @@ function Consumo(){
             <tbody>
               {tablaFiltrada.map(p=>(
                 <tr key={p.id} style={{opacity:p.consTeo>0||p.tieneDatos?1:.45}}>
-                  <td>
-                    <strong>{p.nombre}</strong>
-                    {!p.tieneDatos&&<span className="text-sm" style={{color:'var(--text3)',marginLeft:6}}>sin stock</span>}
-                  </td>
+                  <td><strong>{p.nombre}</strong>{!p.tieneDatos&&<span className="text-sm" style={{color:'var(--text3)',marginLeft:6}}>sin stock</span>}</td>
                   <td>{p.unidad}</td>
-                  <td style={{background:'#EFF6FF22',fontWeight:500}}>
-                    {p.stkIni!==null?fmtNum(p.stkIni,3):<span style={{color:'var(--text3)'}}>—</span>}
-                  </td>
-                  <td style={{background:'#F0FDF422',fontWeight:500}}>
-                    {p.entrega>0?fmtNum(p.entrega,3):<span style={{color:'var(--text3)'}}>—</span>}
-                  </td>
+                  <td style={{background:'#EFF6FF22'}}>{p.stkIni!==null?fmtNum(p.stkIni,3):'—'}</td>
+                  <td style={{background:'#F0FDF422'}}>{p.entrega>0?fmtNum(p.entrega,3):'—'}</td>
                   <td style={{background:'#FFF7ED22',fontWeight:600}}>{fmtNum(p.consTeo,3)}</td>
-                  <td style={{background:'#F5F3FF22',fontWeight:500}}>
-                    {p.stkFinTeo!==null?fmtNum(p.stkFinTeo,3):<span style={{color:'var(--text3)'}}>—</span>}
-                  </td>
-                  <td style={{background:'#FEF3C722',fontWeight:500}}>
-                    {p.stkFin!==null?fmtNum(p.stkFin,3):<span style={{color:'var(--text3)'}}>—</span>}
-                  </td>
-                  <td>
-                    {p.diferencia!==null?(
-                      <span style={{fontWeight:600,color:desvioColor(p.desvio||0)}}>
-                        {p.diferencia>0?'+':''}{fmtNum(p.diferencia,3)}
-                        {p.desvio!==null&&<span style={{fontSize:11,marginLeft:4,fontWeight:400}}>({p.desvio>0?'+':''}{p.desvio}%)</span>}
-                      </span>
-                    ):<span style={{color:'var(--text3)'}}>—</span>}
-                  </td>
+                  <td style={{background:'#F5F3FF22'}}>{p.stkFinTeo!==null?fmtNum(p.stkFinTeo,3):'—'}</td>
+                  <td style={{background:'#FEF3C722'}}>{p.stkFin!==null?fmtNum(p.stkFin,3):'—'}</td>
+                  <td>{p.diferencia!==null?(
+                    <span style={{fontWeight:600,color:desvioColor(p.desvio)}}>
+                      {p.diferencia>0?'+':''}{fmtNum(p.diferencia,3)}
+                      {p.desvio!==null&&<span style={{fontSize:11,marginLeft:4,fontWeight:400}}>({p.desvio>0?'+':''}{fmtNum(p.desvio,1)}%)</span>}
+                    </span>
+                  ):'—'}</td>
                 </tr>
               ))}
             </tbody>
           </table></div>
-          <p className="text-sm mt-1" style={{color:'var(--text3)'}}>
-            STK Final Teórico = STK Inicial + Entrega − Consumo Teórico · Diferencia = STK Final Real − STK Final Teórico
-          </p>
+          <p className="text-sm mt-1" style={{color:'var(--text3)'}}>STK Final Teórico = STK Inicial + Entrega − Consumo Teórico · Diferencia = STK Final Real − STK Final Teórico</p>
         </div>
       </>)}
 
       {tab==='detalle'&&(<div className="card">
         <div className="card-title">Ventas por plato</div>
-        <div className="table-wrap"><table><thead><tr><th>Plato</th><th>Unidades vendidas</th></tr></thead>
+        <div className="table-wrap"><table><thead><tr><th>Plato</th><th>Unidades</th></tr></thead>
           <tbody>{result.porPlato.map((p,i)=><tr key={i}><td>{p.nombre}</td><td><strong>{p.cantidad}</strong></td></tr>)}</tbody>
         </table></div>
       </div>)}
     </>)}
 
-    {result&&!result.ventas?.length&&<div className="card"><div className="empty-state"><div className="icon">📊</div><p>No hay ventas en esta semana.</p></div></div>}
+    {modo==='semana'&&result&&!result.ventas?.length&&<div className="card"><div className="empty-state"><div className="icon">📊</div><p>No hay ventas en esta semana.</p></div></div>}
+
+    {/* VISTA MULTI-SEMANA */}
+    {modo==='multisemana'&&multiResult&&(<>
+      {/* Resumen de ventas por semana */}
+      <div className="card">
+        <div className="card-title">Ventas por semana</div>
+        <div className="metric-grid">
+          {multiResult.map((r,i)=>(
+            <div className="metric" key={i}>
+              <div className="metric-label">{fmtDate(r.desde)} → {fmtDate(r.hasta)}</div>
+              <div className="metric-value">{r.ventas.reduce((a,v)=>a+parseInt(v.cantidad),0)}</div>
+              <div className="text-sm" style={{color:'var(--text2)',marginTop:2}}>{r.porPlato.length} platos</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tabla multi-semana: un producto por fila, semanas como columnas */}
+      {(()=>{
+        // Recopilar todos los productos que aparecen en alguna semana
+        const todosProds = {};
+        multiResult.forEach(r=>{
+          (r.tablaComparativa||[]).forEach(p=>{
+            if(!todosProds[p.id]) todosProds[p.id]={id:p.id,nombre:p.nombre,unidad:p.unidad};
+          });
+        });
+        const prods = Object.values(todosProds).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+        if(!prods.length) return <div className="card"><div className="empty-state"><div className="icon">📊</div><p>Sin datos en este período.</p></div></div>;
+        return(
+          <div className="card">
+            <div className="card-title">Consumo teórico por semana y producto</div>
+            <div className="table-wrap"><table>
+              <thead><tr>
+                <th>Producto</th><th>UM</th>
+                {multiResult.map((r,i)=><th key={i} style={{background:'#FFF7ED22',color:'#9A3412',minWidth:90}}>{fmtDate(r.desde).slice(0,5)}</th>)}
+                <th style={{background:'#EFF6FF22',color:'#1D4ED8'}}>Promedio</th>
+              </tr></thead>
+              <tbody>
+                {prods.map(prod=>{
+                  const vals=multiResult.map(r=>{
+                    const p=(r.tablaComparativa||[]).find(x=>x.id===prod.id);
+                    return p?p.consTeo:null;
+                  });
+                  const valsValidos=vals.filter(v=>v!==null&&v>0);
+                  const promedio=valsValidos.length?valsValidos.reduce((a,b)=>a+b,0)/valsValidos.length:null;
+                  if(!valsValidos.length) return null;
+                  return(
+                    <tr key={prod.id}>
+                      <td><strong>{prod.nombre}</strong></td>
+                      <td>{prod.unidad}</td>
+                      {vals.map((v,i)=><td key={i} style={{background:'#FFF7ED11'}}>{v!==null&&v>0?fmtNum(v,3):<span style={{color:'var(--text3)'}}>—</span>}</td>)}
+                      <td style={{background:'#EFF6FF22',fontWeight:600}}>{promedio?fmtNum(promedio,3):'—'}</td>
+                    </tr>
+                  );
+                }).filter(Boolean)}
+              </tbody>
+            </table></div>
+            <p className="text-sm mt-1" style={{color:'var(--text3)'}}>Solo se muestran productos con al menos una semana de consumo teórico.</p>
+          </div>
+        );
+      })()}
+    </>)}
   </div>);
 }
 
 // ── LOGIN ────────────────────────────────────────────────
 function Login({onLogin}){
-  const[form,setForm]=useState({username:'',password:''});const[loading,setLoading]=useState(false);const[error,setError]=useState('');
-  const submit=async()=>{if(!form.username||!form.password){setError('Completá usuario y contraseña');return;}setLoading(true);setError('');
-    try{const data=await api.login(form.username,form.password);localStorage.setItem('rp_token',data.token);localStorage.setItem('rp_user',JSON.stringify(data.restaurante));onLogin(data.restaurante);}catch(e){setError(e.message);}setLoading(false);};
-  return(<div className="login-page"><div className="login-card">
-    <div className="login-logo"><div className="icon">👨‍🍳</div><h1>RecetasPro</h1><p>Gestión gastronómica inteligente</p></div>
-    <div className="form-field" style={{marginBottom:12}}><label>Usuario</label><input value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="tu_usuario" onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
-    <div className="form-field" style={{marginBottom:12}}><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="••••••••" onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
-    {error&&<p className="login-error">{error}</p>}
-    <button className="btn btn-primary btn-block mt-1" onClick={submit} disabled={loading}>{loading?'Ingresando...':'Ingresar'}</button>
-  </div></div>);
+  const[form,setForm]=useState({username:'',password:''});
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState('');
+  const[branding,setBranding]=useState(null);
+
+  useEffect(()=>{
+    // Try to load branding from localStorage cache
+    try{const b=localStorage.getItem('rp_branding');if(b)setBranding(JSON.parse(b));}catch(e){}
+  },[]);
+
+  const submit=async()=>{
+    if(!form.username||!form.password){setError('Completá usuario y contraseña');return;}
+    setLoading(true);setError('');
+    try{
+      const data=await apiFetch('/auth/login',{method:'POST',body:{username:form.username,password:form.password}});
+      localStorage.setItem('rp_token',data.token);
+      localStorage.setItem('rp_user',JSON.stringify(data.restaurante));
+      // Load and cache branding
+      try{
+        const b=await apiFetch('/branding');
+        if(b){localStorage.setItem('rp_branding',JSON.stringify(b));applyBranding(b);}
+      }catch(e){}
+      onLogin(data.restaurante);
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  };
+
+  const primaryColor = branding?.primaryColor||'#1c1917';
+  const appName = branding?.appName||'RecetasPro';
+
+  return(<div className="login-page">
+    <div className="login-card">
+      <div className="login-logo">
+        {branding?.logoBase64||branding?.logoUrl
+          ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:56,objectFit:'contain',marginBottom:8}}/>
+          : <div style={{width:52,height:52,borderRadius:12,background:primaryColor,display:'inline-flex',alignItems:'center',justifyContent:'center',marginBottom:8,fontSize:24}}>👨‍🍳</div>
+        }
+        <h1>{appName}</h1>
+        <p>Gestión gastronómica inteligente</p>
+      </div>
+      <div className="form-field" style={{marginBottom:12}}><label>Usuario</label><input value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="tu_usuario" onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
+      <div className="form-field" style={{marginBottom:12}}><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="••••••••" onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
+      {error&&<p className="login-error">{error}</p>}
+      <button className="btn btn-primary btn-block mt-1" style={{background:primaryColor,borderColor:primaryColor}} onClick={submit} disabled={loading}>{loading?'Ingresando...':'Ingresar'}</button>
+    </div>
+  </div>);
 }
 
 // ── APP ──────────────────────────────────────────────────
@@ -630,32 +748,41 @@ const NAV=[
   {section:'Recetas',items:[{id:'productos',label:'Productos brutos',icon:'📦'},{id:'intermedias',label:'Recetas intermedias',icon:'🧪'},{id:'finales',label:'Platos finales',icon:'🍽️'}]},
   {section:'Operaciones',items:[{id:'ventas',label:'Ventas',icon:'💰'},{id:'entregas',label:'Entregas',icon:'🚚'},{id:'stock',label:'Stock semanal',icon:'📊'},{id:'stocklink',label:'Link de stock',icon:'🔗'}]},
   {section:'Análisis',items:[{id:'consumo',label:'Consumo teórico',icon:'📈'}]},
-  {section:'Configuración',items:[{id:'branding',label:'Branding',icon:'🎨'}]},
+  {section:'Config',items:[{id:'branding',label:'Branding',icon:'🎨'}]},
 ];
 
 export default function App(){
-  const[user,setUser]=useState(null);const[page,setPage]=useState('productos');
+  const[user,setUser]=useState(null);
+  const[page,setPage]=useState('productos');
   const[db,setDb]=useState({productos:[],intermedias:[],finales:[]});
   const[branding,setBranding]=useState(null);
 
   useEffect(()=>{
     const token=localStorage.getItem('rp_token');
     const u=localStorage.getItem('rp_user');
+    const b=localStorage.getItem('rp_branding');
     if(token&&u) setUser(JSON.parse(u));
+    if(b) try{const bd=JSON.parse(b);setBranding(bd);applyBranding(bd);}catch(e){}
   },[]);
 
   const loadAll=useCallback(async()=>{
     const[p,i,f]=await Promise.all([api.getProductos(),api.getIntermedias(),api.getFinales()]);
     setDb({productos:p,intermedias:i,finales:f});
-    // Load branding
     try{
       const b=await apiFetch('/branding');
-      if(b){setBranding(b);applyBranding(b);}
+      if(b){setBranding(b);applyBranding(b);localStorage.setItem('rp_branding',JSON.stringify(b));}
     }catch(e){}
   },[]);
 
   useEffect(()=>{if(user)loadAll();},[user,loadAll]);
-  const logout=()=>{localStorage.removeItem('rp_token');localStorage.removeItem('rp_user');setUser(null);};
+
+  const logout=()=>{
+    localStorage.removeItem('rp_token');
+    localStorage.removeItem('rp_user');
+    localStorage.removeItem('rp_branding');
+    setUser(null);
+  };
+
   if(!user) return <Login onLogin={u=>setUser(u)}/>;
 
   const renderPage=()=>{
@@ -667,32 +794,32 @@ export default function App(){
     if(page==='stock') return <Stock productos={db.productos}/>;
     if(page==='stocklink') return <StockLink productos={db.productos}/>;
     if(page==='consumo') return <Consumo/>;
-    if(page==='branding') return <Branding/>;
+    if(page==='branding') return <Branding onSave={b=>{setBranding(b);applyBranding(b);localStorage.setItem('rp_branding',JSON.stringify(b));}}/>;
   };
 
-  const sidebarBg = branding?.primaryColor || 'var(--bg2)';
-  const sidebarColor = branding?.secondaryColor || 'var(--text2)';
+  const sidebarBg=branding?.primaryColor||'var(--bg2)';
+  const sidebarTxt=branding?.secondaryColor||'var(--text2)';
 
   return(<div className="app">
     <div className="sidebar" style={{background:sidebarBg}}>
       <div className="sidebar-header" style={{borderColor:'rgba(255,255,255,.15)'}}>
         {branding?.logoBase64||branding?.logoUrl
-          ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:32,objectFit:'contain',marginBottom:4}}/>
-          : <div className="rest-name" style={{color:sidebarColor}}>{branding?.appName||user.nombre}</div>
+          ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:36,objectFit:'contain',marginBottom:4}}/>
+          : <div className="rest-name" style={{color:sidebarTxt}}>{branding?.appName||user.nombre}</div>
         }
-        <div className="rest-sub" style={{color:sidebarColor,opacity:.7}}>{user.nombre}</div>
+        <div className="rest-sub" style={{color:sidebarTxt,opacity:.7}}>{user.nombre}</div>
       </div>
       {NAV.map(s=>(<div className="nav-section" key={s.section}>
-        <div className="nav-label" style={{color:sidebarColor,opacity:.5}}>{s.section}</div>
+        <div className="nav-label" style={{color:sidebarTxt,opacity:.5}}>{s.section}</div>
         {s.items.map(item=>(<div key={item.id}
           className={`nav-item${page===item.id?' active':''}`}
-          style={{color:page===item.id?sidebarColor:'',background:page===item.id?'rgba(255,255,255,.15)':'',opacity:page===item.id?1:.8}}
+          style={{color:sidebarTxt,background:page===item.id?'rgba(255,255,255,.18)':'',opacity:page===item.id?1:.8}}
           onClick={()=>setPage(item.id)}>
           <span>{item.icon}</span>{item.label}
         </div>))}
       </div>))}
       <div className="sidebar-footer" style={{borderColor:'rgba(255,255,255,.15)'}}>
-        <button className="logout-btn" style={{color:sidebarColor,opacity:.7}} onClick={logout}>🚪 Cerrar sesión</button>
+        <button className="logout-btn" style={{color:sidebarTxt,opacity:.7}} onClick={logout}>🚪 Cerrar sesión</button>
       </div>
     </div>
     <div className="content">{renderPage()}</div>
