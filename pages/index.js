@@ -926,7 +926,7 @@ function applyBranding(config){
 }
 
 // ── SUCURSALES ───────────────────────────────────────────
-function Sucursales(){
+function Sucursales({onUpdate}){
   const[sucursales,setSucursales]=useState([]);
   const[editing,setEditing]=useState(null);
   const[showNueva,setShowNueva]=useState(false);
@@ -959,6 +959,8 @@ function Sucursales(){
     try{
       await apiFetch(`/sucursales/${editing.id}`,{method:'PUT',body:editForm});
       setEditing(null);setOk('✓ Sucursal actualizada');load();
+      // If editing current sucursal, update name in sidebar
+      if(parseInt(localStorage.getItem('rp_sucursal_id'))===editing.id && onUpdate) onUpdate(editForm.nombre);
     }catch(e){setError(e.message);}
     setLoading(false);
   };
@@ -1233,6 +1235,7 @@ export default function App(){
     localStorage.setItem('rp_sucursal_id', sucursal.id);
     localStorage.setItem('rp_modulos', JSON.stringify(sucursal.modulos||'all'));
     setUser(u=>({...u, sucursal, modulos:sucursal.modulos||'all'}));
+    setSucursalNombre(sucursal.nombre);
     setPage('productos');
     loadAll();
   };
@@ -1263,27 +1266,34 @@ export default function App(){
     if(page==='stocklink') return <StockLink productos={db.productos}/>;
     if(page==='consumo') return <Consumo/>;
     if(page==='branding') return <Branding onSave={b=>{setBranding(b);applyBranding(b);localStorage.setItem('rp_branding',JSON.stringify(b));}}/>;
-    if(page==='sucursales') return <Sucursales/>;
+    if(page==='sucursales') return <Sucursales onUpdate={nombre=>setSucursalNombre(nombre)}/>;
     if(page==='usuarios') return <Usuarios/>;
   };
 
   const sidebarBg=branding?.primaryColor||'var(--bg2)';
   const sidebarTxt=branding?.secondaryColor||'var(--text2)';
-  const sucursalNombre=user.sucursal?.nombre||user.nombre;
+  // Always get fresh sucursal name from db if available
+  const[sucursalNombre,setSucursalNombre]=useState(user.sucursal?.nombre||user.nombre);
+  useEffect(()=>{
+    apiFetch('/sucursales').then(subs=>{
+      const current=subs.find(s=>s.id===parseInt(localStorage.getItem('rp_sucursal_id')));
+      if(current) setSucursalNombre(current.nombre);
+    }).catch(()=>{});
+  },[]);
 
   return(<div className="app">
     <div className="sidebar" style={{background:sidebarBg,position:'relative'}}>
       <div className="sidebar-header" style={{borderColor:'rgba(255,255,255,.15)',cursor:user.sucursales?.length>1?'pointer':'default'}}
-        onClick={()=>{ if(user.sucursales?.length>1) setShowSucursales(s=>!s); }}>
+        onClick={()=>setShowSucursales(s=>!s)}>
         {branding?.logoBase64||branding?.logoUrl
           ? <img src={branding.logoBase64||branding.logoUrl} alt="logo" style={{height:36,objectFit:'contain',marginBottom:4}}/>
           : <div className="rest-name" style={{color:sidebarTxt}}>{branding?.appName||'RecetasPro'}</div>
         }
         <div style={{display:'flex',alignItems:'center',gap:4}}>
           <div className="rest-sub" style={{color:sidebarTxt,opacity:.7}}>{sucursalNombre}</div>
-          {user.sucursales?.length>1&&<span style={{color:sidebarTxt,opacity:.5,fontSize:10}}>▾</span>}
+          <span style={{color:sidebarTxt,opacity:.4,fontSize:10}}>▾</span>
         </div>
-        {showSucursales&&user.sucursales?.length>1&&(
+        {showSucursales&&(
           <div style={{position:'absolute',top:72,left:0,right:0,background:'white',border:'1px solid var(--border)',borderRadius:6,boxShadow:'0 4px 12px rgba(0,0,0,.15)',zIndex:200,overflow:'hidden'}}>
             {user.sucursales.map(s=>(
               <div key={s.id} style={{padding:'10px 14px',fontSize:13,cursor:'pointer',borderBottom:'1px solid var(--border)',color:'var(--text)',fontWeight:s.id===user.sucursal?.id?600:400,background:s.id===user.sucursal?.id?'var(--bg3)':'white'}}
