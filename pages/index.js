@@ -931,18 +931,47 @@ function Usuarios(){
   const[restaurantes,setRestaurantes]=useState([]);
   const[editing,setEditing]=useState(null);
   const[loading,setLoading]=useState(false);
+  const[showNuevo,setShowNuevo]=useState(false);
+  const[nuevoForm,setNuevoForm]=useState({nombre:'',email:'',password:''});
+  const[nuevoError,setNuevoError]=useState('');
+  const[nuevoOk,setNuevoOk]=useState('');
 
   const TODOS_MODULOS=['productos','intermedias','finales','ventas','entregas','stock','stocklink','consumo','branding'];
   const MODULO_LABELS={productos:'Productos brutos',intermedias:'Recetas intermedias',finales:'Platos finales',ventas:'Ventas',entregas:'Entregas',stock:'Stock semanal',stocklink:'Link de stock',consumo:'Consumo teórico',branding:'Branding'};
 
   const load=async()=>{
-    const[u,r]=await Promise.all([apiFetch('/usuarios'),apiFetch('/restaurantes-lista')]);
-    setUsuarios(u);setRestaurantes(r);
+    try{
+      const[u,r]=await Promise.all([apiFetch('/usuarios'),apiFetch('/restaurantes-lista')]);
+      setUsuarios(u);setRestaurantes(r);
+    }catch(e){console.error(e);}
   };
   useEffect(()=>{load();},[]);
 
-  const aprobar=async(u)=>{
-    await apiFetch(`/usuarios/${u.id}`,{method:'PUT',body:{activo:true}});load();
+  const crearUsuario=async()=>{
+    if(!nuevoForm.nombre||!nuevoForm.email||!nuevoForm.password){setNuevoError('Completá todos los campos');return;}
+    setLoading(true);setNuevoError('');
+    try{
+      const data=await fetch('/api/auth/registro',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(nuevoForm)}).then(r=>r.json());
+      if(data.error) throw new Error(data.error);
+      // Auto-aprobar si lo crea el superadmin
+      const users=await apiFetch('/usuarios');
+      const newUser=users.find(u=>u.email===nuevoForm.email.toLowerCase());
+      if(newUser) await apiFetch(`/usuarios/${newUser.id}`,{method:'PUT',body:{activo:true,permisos:[]}});
+      setNuevoOk(`✓ Usuario "${nuevoForm.nombre}" creado y activado`);
+      setNuevoForm({nombre:'',email:'',password:''});
+      setShowNuevo(false);
+      load();
+    }catch(e){setNuevoError(e.message);}
+    setLoading(false);
+  };
+
+  const toggleActivo=async(u)=>{
+    await apiFetch(`/usuarios/${u.id}`,{method:'PUT',body:{activo:!u.activo,permisos:u.permisos||[]}});load();
+  };
+
+  const eliminar=async(u)=>{
+    if(!confirm(`¿Eliminar usuario "${u.nombre}"?`))return;
+    await apiFetch(`/usuarios/${u.id}`,{method:'DELETE'});load();
   };
 
   const toggleModulo=(permiso,modulo,checked)=>{
@@ -957,23 +986,57 @@ function Usuarios(){
   };
 
   return(<div className="page active">
-    <div className="page-header"><h2>Gestión de usuarios</h2><p>Aprobá usuarios y asigná sucursales y módulos</p></div>
+    <div className="page-header"><h2>Gestión de usuarios</h2><p>Creá usuarios y asignales sucursales y módulos</p></div>
 
+    {nuevoOk&&<div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:6,padding:'10px 14px',fontSize:13,color:'#166534',marginBottom:12}}>{nuevoOk}</div>}
+
+    {/* Crear usuario */}
     <div className="card">
-      <div className="card-title">Usuarios registrados</div>
+      <div className="card-title">
+        <span>Crear usuario</span>
+        <button className="btn btn-sm" onClick={()=>{setShowNuevo(!showNuevo);setNuevoError('');}}>{showNuevo?'✕ Cancelar':'+ Nuevo usuario'}</button>
+      </div>
+      {showNuevo&&(<div>
+        <div className="form-grid mb-1">
+          <div className="form-field"><label>Nombre</label><input value={nuevoForm.nombre} onChange={e=>setNuevoForm({...nuevoForm,nombre:e.target.value})} placeholder="Nombre completo"/></div>
+          <div className="form-field"><label>Email</label><input type="email" value={nuevoForm.email} onChange={e=>setNuevoForm({...nuevoForm,email:e.target.value})} placeholder="email@ejemplo.com"/></div>
+          <div className="form-field"><label>Contraseña inicial</label><input type="password" value={nuevoForm.password} onChange={e=>setNuevoForm({...nuevoForm,password:e.target.value})} placeholder="Mínimo 6 caracteres"/></div>
+        </div>
+        {nuevoError&&<p className="login-error">{nuevoError}</p>}
+        <button className="btn btn-primary" onClick={crearUsuario} disabled={loading}>{loading?'Creando...':'Crear y activar usuario'}</button>
+        <p className="text-sm mt-1" style={{color:'var(--text2)'}}>El usuario queda activo de inmediato. Asignale sucursales y módulos desde la tabla abajo.</p>
+      </div>)}
+    </div>
+
+    {/* Lista de usuarios */}
+    <div className="card">
+      <div className="card-title">Usuarios registrados ({usuarios.length})</div>
       <div className="table-wrap"><table>
-        <thead><tr><th>Nombre</th><th>Email</th><th>Estado</th><th>Sucursales</th><th></th></tr></thead>
+        <thead><tr><th>Nombre</th><th>Email</th><th>Estado</th><th>Sucursales con acceso</th><th></th></tr></thead>
         <tbody>
-          {!usuarios.length&&<tr><td colSpan={5}><div className="empty-state"><div className="icon">👥</div><p>Sin usuarios aún.</p></div></td></tr>}
+          {!usuarios.length&&<tr><td colSpan={5}><div className="empty-state"><div className="icon">👥</div><p>Sin usuarios aún. Creá el primero arriba.</p></div></td></tr>}
           {usuarios.map(u=>(
             <tr key={u.id}>
-              <td><strong>{u.nombre}</strong>{u.es_superadmin&&<span className="badge badge-blue" style={{marginLeft:6}}>Superadmin</span>}</td>
+              <td>
+                <strong>{u.nombre}</strong>
+                {u.es_superadmin&&<span className="badge badge-blue" style={{marginLeft:6,fontSize:10}}>Superadmin</span>}
+              </td>
               <td>{u.email}</td>
-              <td>{u.activo?<span className="badge badge-green">Activo</span>:<span className="badge badge-amber">Pendiente</span>}</td>
-              <td><span className="text-sm">{(u.permisos||[]).map(p=>p.restaurante_nombre).join(', ')||'—'}</span></td>
+              <td>
+                <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer'}}>
+                  <input type="checkbox" checked={u.activo} onChange={()=>toggleActivo(u)}/>
+                  <span className={`badge ${u.activo?'badge-green':'badge-amber'}`}>{u.activo?'Activo':'Inactivo'}</span>
+                </label>
+              </td>
+              <td>
+                <span className="text-sm">
+                  {(u.permisos||[]).length===0?<span style={{color:'var(--text3)'}}>Sin sucursales asignadas</span>
+                    :u.permisos.map(p=><span key={p.restaurante_id} className="tag">{p.restaurante_nombre}</span>)}
+                </span>
+              </td>
               <td style={{display:'flex',gap:4}}>
-                {!u.activo&&!u.es_superadmin&&<button className="btn btn-sm badge-green" onClick={()=>aprobar(u)}>✓ Aprobar</button>}
-                {!u.es_superadmin&&<button className="btn btn-sm" onClick={()=>setEditing({...u,permisos:u.permisos||[]})}>✏️ Permisos</button>}
+                <button className="btn btn-sm" onClick={()=>setEditing({...u,permisos:u.permisos||[]})}>✏️ Permisos</button>
+                {!u.es_superadmin&&<button className="btn btn-sm btn-danger" onClick={()=>eliminar(u)}>🗑</button>}
               </td>
             </tr>
           ))}
@@ -981,43 +1044,54 @@ function Usuarios(){
       </table></div>
     </div>
 
+    {/* Modal permisos */}
     {editing&&(
-      <Modal title={`Permisos de ${editing.nombre}`} onClose={()=>setEditing(null)} wide>
-        <div style={{marginBottom:12}}>
+      <Modal title={`Permisos — ${editing.nombre}`} onClose={()=>setEditing(null)} wide>
+        <div style={{marginBottom:14}}>
           <label style={{display:'flex',alignItems:'center',gap:8,fontSize:14,cursor:'pointer'}}>
             <input type="checkbox" checked={editing.activo} onChange={e=>setEditing({...editing,activo:e.target.checked})}/>
-            Usuario activo (puede ingresar)
+            <strong>Usuario activo</strong> — puede ingresar al sistema
           </label>
         </div>
-        <div className="card-title" style={{fontSize:13}}>Sucursales y módulos habilitados</div>
+
+        <div style={{fontSize:13,fontWeight:600,marginBottom:10,color:'var(--text2)'}}>Sucursales y módulos habilitados</div>
+        {restaurantes.length===0&&<p className="text-sm" style={{color:'var(--text3)'}}>No hay sucursales cargadas.</p>}
         {restaurantes.map(r=>{
           const permiso=editing.permisos.find(p=>p.restaurante_id===r.id)||{restaurante_id:r.id,modulos:[]};
           const tieneAcceso=editing.permisos.some(p=>p.restaurante_id===r.id);
-          return(<div key={r.id} style={{border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:8}}>
-            <label style={{display:'flex',alignItems:'center',gap:8,fontWeight:500,marginBottom:tieneAcceso?8:0,cursor:'pointer'}}>
+          const todosModulos=permiso.modulos.length===0;
+          return(<div key={r.id} style={{border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:8,background:tieneAcceso?'var(--bg3)':'var(--bg2)'}}>
+            <label style={{display:'flex',alignItems:'center',gap:8,fontWeight:600,marginBottom:tieneAcceso?10:0,cursor:'pointer',fontSize:14}}>
               <input type="checkbox" checked={tieneAcceso} onChange={e=>{
                 if(e.target.checked) setEditing({...editing,permisos:[...editing.permisos,{restaurante_id:r.id,modulos:[]}]});
                 else setEditing({...editing,permisos:editing.permisos.filter(p=>p.restaurante_id!==r.id)});
-              }}/> {r.nombre}
+              }}/> 🏪 {r.nombre}
             </label>
-            {tieneAcceso&&(<div style={{display:'flex',flexWrap:'wrap',gap:6,marginLeft:24}}>
-              <label style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:4,padding:'3px 8px',borderRadius:4,background:'var(--bg3)',fontWeight:600}}>
-                <input type="checkbox" checked={permiso.modulos.length===0} onChange={e=>{
-                  if(e.target.checked) setEditing({...editing,permisos:editing.permisos.map(p=>p.restaurante_id===r.id?{...p,modulos:[]}:p)});
-                }}/> Todos
-              </label>
-              {TODOS_MODULOS.map(m=>(
-                <label key={m} style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:4,padding:'3px 8px',borderRadius:4,background:permiso.modulos.includes(m)?'var(--primary)':'var(--bg3)',color:permiso.modulos.includes(m)?'var(--primary-fg)':'var(--text2)'}}>
-                  <input type="checkbox" style={{display:'none'}} checked={permiso.modulos.includes(m)} onChange={e=>{
-                    const newMods=toggleModulo(permiso,m,e.target.checked);
-                    setEditing({...editing,permisos:editing.permisos.map(p=>p.restaurante_id===r.id?{...p,modulos:newMods}:p)});
-                  }}/>{MODULO_LABELS[m]}
+            {tieneAcceso&&(<>
+              <div style={{fontSize:12,color:'var(--text2)',marginBottom:6,marginLeft:24}}>Módulos habilitados:</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:6,marginLeft:24}}>
+                <label style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:4,padding:'4px 10px',borderRadius:4,background:todosModulos?'var(--primary)':'var(--bg2)',color:todosModulos?'var(--primary-fg)':'var(--text2)',border:'1px solid var(--border)',fontWeight:600}}>
+                  <input type="checkbox" style={{display:'none'}} checked={todosModulos} onChange={()=>{
+                    setEditing({...editing,permisos:editing.permisos.map(p=>p.restaurante_id===r.id?{...p,modulos:[]}:p)});
+                  }}/> ✓ Todos
                 </label>
-              ))}
-            </div>)}
+                {TODOS_MODULOS.map(m=>{
+                  const activo=!todosModulos&&permiso.modulos.includes(m);
+                  return(<label key={m} style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:4,padding:'4px 10px',borderRadius:4,background:activo?'var(--primary)':'var(--bg2)',color:activo?'var(--primary-fg)':'var(--text2)',border:'1px solid var(--border)'}}>
+                    <input type="checkbox" style={{display:'none'}} checked={activo} onChange={e=>{
+                      const newMods=toggleModulo(permiso,m,e.target.checked);
+                      setEditing({...editing,permisos:editing.permisos.map(p=>p.restaurante_id===r.id?{...p,modulos:newMods}:p)});
+                    }}/>{MODULO_LABELS[m]}
+                  </label>);
+                })}
+              </div>
+            </>)}
           </div>);
         })}
-        <button className="btn btn-primary btn-block mt-1" onClick={guardarPermisos} disabled={loading}>{loading?'Guardando...':'Guardar permisos'}</button>
+        <div style={{display:'flex',gap:8,marginTop:12}}>
+          <button className="btn" onClick={()=>setEditing(null)}>Cancelar</button>
+          <button className="btn btn-primary" style={{flex:1}} onClick={guardarPermisos} disabled={loading}>{loading?'Guardando...':'✓ Guardar permisos'}</button>
+        </div>
       </Modal>
     )}
   </div>);
