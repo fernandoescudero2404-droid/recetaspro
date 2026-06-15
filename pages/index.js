@@ -1213,6 +1213,7 @@ export default function App(){
   const[db,setDb]=useState({productos:[],intermedias:[],finales:[]});
   const[branding,setBranding]=useState(null);
   const[showSucursales,setShowSucursales]=useState(false);
+  const[sucursalNombreState,setSucursalNombre]=useState('');
 
   useEffect(()=>{
     const token=localStorage.getItem('rp_token');
@@ -1229,6 +1230,16 @@ export default function App(){
   },[]);
 
   useEffect(()=>{if(user)loadAll();},[user,loadAll]);
+
+  // Refresh sucursal name from DB (in case it was renamed)
+  useEffect(()=>{
+    if(!user) return;
+    apiFetch('/sucursales').then(subs=>{
+      const id=parseInt(localStorage.getItem('rp_sucursal_id'));
+      const current=subs.find(s=>s.id===id);
+      if(current) setSucursalNombre(current.nombre);
+    }).catch(()=>{});
+  },[user]);
 
   const cambiarSucursal=(sucursal)=>{
     setShowSucursales(false);
@@ -1272,14 +1283,7 @@ export default function App(){
 
   const sidebarBg=branding?.primaryColor||'var(--bg2)';
   const sidebarTxt=branding?.secondaryColor||'var(--text2)';
-  // Always get fresh sucursal name from db if available
-  const[sucursalNombre,setSucursalNombre]=useState(user.sucursal?.nombre||user.nombre);
-  useEffect(()=>{
-    apiFetch('/sucursales').then(subs=>{
-      const current=subs.find(s=>s.id===parseInt(localStorage.getItem('rp_sucursal_id')));
-      if(current) setSucursalNombre(current.nombre);
-    }).catch(()=>{});
-  },[]);
+  const sucursalNombre=sucursalNombreState||user.sucursal?.nombre||user.nombre;
 
   return(<div className="app">
     <div className="sidebar" style={{background:sidebarBg,position:'relative'}}>
