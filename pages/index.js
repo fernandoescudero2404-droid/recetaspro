@@ -862,28 +862,66 @@ function Entregas({productos}){
     else setForm({...form,producto_id:'',producto_nombre:'',unidad:'kg'});
   };
 
+  const parsearRemito=(texto)=>{
+    const nroMatch=texto.match(/Remito\s*Nro[:\s]+([\S]+)/i);
+    const fechaMatch=texto.match(/Fecha[:\s]+(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i);
+    const provMatch=texto.match(/Nombre[:\s]+(.+?)(?:Local:|\n)/i);
+    let fechaISO=today();
+    if(fechaMatch){
+      const parts=fechaMatch[1].split(/[\/-]/);
+      if(parts.length===3){const[d,m,y]=parts;fechaISO=`${y.length===2?'20'+y:y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;}
+    }
+    const tieneEnviado=/ENVIADO/i.test(texto);
+    const items=[];const lines=texto.split('\n');let inItems=false;
+    for(const line of lines){
+      if(/SKU\s+DESC/i.test(line)||/SKU\s+PRODUCTO/i.test(line)){inItems=true;continue;}
+      if(/Observa|Firma|Total/i.test(line)){inItems=false;continue;}
+      if(!inItems) continue;
+      const l=line.trim();if(!l) continue;
+      const m=l.match(/^(\S+)\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s*(kg|un|lts?|grs?|und|litro|cc|u)\s+(?:(\d+(?:[.,]\d+)?)\s*(kg|un|lts?|grs?|und|litro|cc|u))?\s*$/i);
+      if(m){
+        const[,sku,desc,c1,u1,c2,u2]=m;
+        const cant=tieneEnviado&&c2!=null?parseFloat(c2.replace(',','.')):parseFloat(c1.replace(',','.'));
+        const unit=tieneEnviado&&u2?u2:u1;
+        if(cant>0) items.push({sku,descripcion:desc.trim(),cantidad:cant,unidad:unit});
+      }
+    }
+    return{proveedor:provMatch?provMatch[1].trim():'',fecha:fechaISO,numero:nroMatch?nroMatch[1]:'',items};
+  };
+
   const handlePDF=async e=>{
-    const file=e.target.files[0];
-    if(!file) return;
+    const file=e.target.files[0];if(!file) return;
     setPdfLoading(true);
-    const reader=new FileReader();
-    reader.onload=async ev=>{
-      const base64=ev.target.result.split(',')[1];
-      try{
-        const data=await apiFetch('/pdf-remito',{method:'POST',body:{pdfBase64:base64}});
-        setPdfMeta({proveedor:data.proveedor||'',fecha:data.fecha||today(),numero:data.numero||''});
-        setPdfItems((data.items||[]).map((item,i)=>({
-          ...item,
-          id:i,
-          producto_id: productos.find(p=>p.nombre.toLowerCase().includes(item.descripcion.toLowerCase().substring(0,8)))?.id||null,
-          activo:true
-        })));
-        setPdfModal(true);
-      }catch(err){alert('Error al leer el PDF: '+err.message);}
-      setPdfLoading(false);
-    };
-    reader.readAsDataURL(file);
-    e.target.value='';
+    try{
+      if(!window.pdfjsLib){
+        await new Promise((res,rej)=>{
+          const s=document.createElement('script');
+          s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          s.onload=res;s.onerror=rej;document.head.appendChild(s);
+        });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+      const arrayBuffer=await file.arrayBuffer();
+      const pdf=await window.pdfjsLib.getDocument({data:arrayBuffer}).promise;
+      let texto='';
+      for(let i=1;i<=pdf.numPages;i++){
+        const page=await pdf.getPage(i);const ct=await page.getTextContent();
+        const lineMap={};
+        for(const it of ct.items){const y=Math.round(it.transform[5]);if(!lineMap[y])lineMap[y]=[];lineMap[y].push(it.str);}
+        Object.keys(lineMap).map(Number).sort((a,b)=>b-a).forEach(y=>{texto+=lineMap[y].join(' ')+'\n';});
+      }
+      const data=parsearRemito(texto);
+      setPdfMeta({proveedor:data.proveedor,fecha:data.fecha,numero:data.numero});
+      setPdfItems(data.items.map((item,i)=>({
+        ...item,id:i,activo:true,
+        producto_id:productos.find(p=>
+          p.nombre.toLowerCase().includes(item.descripcion.toLowerCase().slice(0,10))||
+          (item.sku&&p.notas&&p.notas.toLowerCase()===item.sku.toLowerCase())
+        )?.id||null
+      })));
+      setPdfModal(true);
+    }catch(err){alert('Error al leer el PDF: '+err.message);}
+    setPdfLoading(false);e.target.value='';
   };
 
   const confirmarPDF=async()=>{
